@@ -24,25 +24,32 @@ const MAX_SCALE    = 2000;
 const ROTATE_SPEED = 0.4;
 const SPIN_SPEED   = 0.025;
 
-// ── Extract tag from feature (handles all Natural Earth naming variants) ──
+// ADM0_A3 is always populated in Natural Earth; ISO_A3 often has -99 placeholders
 function getTag(p: Record<string, unknown>): string {
-  return String(
-    p.iso_a3 ?? p.ISO_A3 ?? p.ADM0_A3 ?? p.adm0_a3 ?? ""
-  ).toUpperCase();
+  const candidates = [
+    p.ADM0_A3, p.adm0_a3,
+    p.ISO_A3,  p.iso_a3,
+    p.ISO_A3_EH, p.iso_a3_eh,
+  ];
+  for (const v of candidates) {
+    const s = String(v ?? "").toUpperCase().trim();
+    if (s && s !== "-99" && s !== "N/A" && s.length >= 2) return s;
+  }
+  // Last resort: hash the country name
+  return String(p.NAME ?? p.name ?? p.ADMIN ?? p.admin ?? "UNK").toUpperCase().slice(0, 3);
 }
 
-function getName(p: Record<string, unknown>, tag: string): string {
-  return String(p.name ?? p.NAME ?? p.ADMIN ?? p.admin ?? tag);
+function getName(p: Record<string, unknown>): string {
+  return String(p.NAME ?? p.name ?? p.ADMIN ?? p.admin ?? p.NAME_LONG ?? "Unknown");
 }
 
-// ── Stable unique muted color per country tag ──────────────────
 function tagToColor(tag: string): string {
-  if (!tag) return "#4a3a3a";
-  let hash = 0;
-  for (let i = 0; i < tag.length; i++) hash = tag.charCodeAt(i) + ((hash << 5) - hash);
-  const h = ((hash >>> 0) % 360);
-  const s = 30 + ((hash >> 4) & 0xf);  // 30–46%
-  const l = 25 + ((hash >> 8) & 0xf);  // 25–41%
+  let hash = 5381;
+  for (let i = 0; i < tag.length; i++) hash = ((hash << 5) + hash) ^ tag.charCodeAt(i);
+  hash = hash >>> 0;
+  const h = hash % 360;
+  const s = 25 + (hash >> 4) % 20;   // 25–45%
+  const l = 22 + (hash >> 8) % 18;   // 22–40%
   return `hsl(${h},${s}%,${l}%)`;
 }
 
@@ -77,10 +84,9 @@ export default function GameMap() {
   } = useGameStore();
 
   const getColor = useCallback((tag: string): string => {
-    const province      = Object.values(provinces).find(p => p.province_key === tag);
-    const ownerNationId = province?.owner_nation_id ?? null;
-    const ownerNation   = ownerNationId ? nations[ownerNationId] : null;
-    return ownerNation?.color ?? tagToColor(tag);
+    const province = Object.values(provinces).find(p => p.province_key === tag);
+    const owner    = province?.owner_nation_id ? nations[province.owner_nation_id] : null;
+    return owner?.color ?? tagToColor(tag);
   }, [provinces, nations]);
 
   const draw = useCallback(() => {
@@ -90,18 +96,16 @@ export default function GameMap() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const W = canvas.width;
-    const H = canvas.height;
-    const cx = W / 2;
-    const cy = H / 2;
+    const W = canvas.width, H = canvas.height;
+    const cx = W / 2, cy = H / 2;
 
-    const projection = geoOrthographic()
+    const proj = geoOrthographic()
       .scale(scaleRef.current)
       .translate([cx, cy])
       .rotate(rotateRef.current)
       .clipAngle(90);
 
-    const path      = geoPath(projection, ctx);
+    const path      = geoPath(proj, ctx);
     const graticule = geoGraticule()();
     const sphere: GeoPermissibleObjects = { type: "Sphere" };
 
@@ -113,21 +117,16 @@ export default function GameMap() {
 
     // Stars
     for (let i = 0; i < 220; i++) {
-      const sx = (i * 7919 + 11) % W;
-      const sy = (i * 6271 + 17) % H;
-      ctx.fillStyle = `rgba(255,255,255,${0.2 + (i % 5) * 0.12})`;
+      ctx.fillStyle = `rgba(255,255,255,${0.15 + (i % 5) * 0.1})`;
       ctx.beginPath();
-      ctx.arc(sx, sy, i % 4 === 0 ? 1.1 : 0.5, 0, Math.PI * 2);
+      ctx.arc((i * 7919 + 11) % W, (i * 6271 + 17) % H, i % 4 === 0 ? 1.0 : 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
 
     // Ocean
     ctx.beginPath();
     path(sphere);
-    const ocean = ctx.createRadialGradient(
-      cx - scaleRef.current * 0.2, cy - scaleRef.current * 0.25, 0,
-      cx, cy, scaleRef.current
-    );
+    const ocean = ctx.createRadialGradient(cx - scaleRef.current * 0.2, cy - scaleRef.current * 0.25, 0, cx, cy, scaleRef.current);
     ocean.addColorStop(0,   "#1e5fa0");
     ocean.addColorStop(0.5, "#0e3d70");
     ocean.addColorStop(1,   "#071e3d");
@@ -152,22 +151,17 @@ export default function GameMap() {
 
         ctx.beginPath();
         path(feature as GeoPermissibleObjects);
-
         ctx.fillStyle = toRgba(color, isSelected ? 1.0 : isMine ? 0.95 : 0.88);
         ctx.fill();
 
         ctx.shadowBlur = 0;
         if (isSelected) {
-          ctx.shadowColor = "#ffd700";
-          ctx.shadowBlur  = 10;
-          ctx.strokeStyle = "#ffd700";
-          ctx.lineWidth   = 1.8;
+          ctx.shadowColor = "#ffd700"; ctx.shadowBlur = 10;
+          ctx.strokeStyle = "#ffd700"; ctx.lineWidth = 1.8;
         } else if (isMine) {
-          ctx.strokeStyle = "rgba(255,255,255,0.55)";
-          ctx.lineWidth   = 0.9;
+          ctx.strokeStyle = "rgba(255,255,255,0.55)"; ctx.lineWidth = 0.9;
         } else {
-          ctx.strokeStyle = "rgba(0,0,0,0.65)";
-          ctx.lineWidth   = 0.5;
+          ctx.strokeStyle = "rgba(0,0,0,0.65)"; ctx.lineWidth = 0.5;
         }
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -182,54 +176,39 @@ export default function GameMap() {
     atmo.addColorStop(1,   "rgba(60,130,255,0.0)");
     ctx.beginPath();
     ctx.arc(cx, cy, scaleRef.current * 1.15, 0, Math.PI * 2);
-    ctx.fillStyle = atmo;
-    ctx.fill();
+    ctx.fillStyle = atmo; ctx.fill();
     ctx.restore();
 
-    // Globe rim
-    ctx.beginPath();
-    path(sphere);
-    ctx.strokeStyle = "rgba(100,170,255,0.22)";
-    ctx.lineWidth   = 1;
-    ctx.stroke();
+    // Rim
+    ctx.beginPath(); path(sphere);
+    ctx.strokeStyle = "rgba(100,170,255,0.22)"; ctx.lineWidth = 1; ctx.stroke();
 
     // Unit markers
     if (geo) {
-      const byProvince: Record<string, { nation_id: string }[]> = {};
-      for (const unit of Object.values(units)) {
-        if (!byProvince[unit.province_id]) byProvince[unit.province_id] = [];
-        byProvince[unit.province_id].push(unit);
+      const byProv: Record<string, { nation_id: string }[]> = {};
+      for (const u of Object.values(units)) {
+        if (!byProv[u.province_id]) byProv[u.province_id] = [];
+        byProv[u.province_id].push(u);
       }
-      for (const [provinceId, pUnits] of Object.entries(byProvince)) {
-        const province = provinces[provinceId];
-        if (!province) continue;
-        const feature = geo.features.find(
-          f => getTag(f.properties) === province.province_key
-        );
-        if (!feature) continue;
-        const c = path.centroid(feature as GeoPermissibleObjects);
+      for (const [pid, pu] of Object.entries(byProv)) {
+        const prov = provinces[pid]; if (!prov) continue;
+        const feat = geo.features.find(f => getTag(f.properties) === prov.province_key);
+        if (!feat) continue;
+        const c = path.centroid(feat as GeoPermissibleObjects);
         if (!c || isNaN(c[0])) continue;
-
-        const byNation: Record<string, number> = {};
-        for (const u of pUnits) byNation[u.nation_id] = (byNation[u.nation_id] || 0) + 1;
-
+        const byN: Record<string, number> = {};
+        for (const u of pu) byN[u.nation_id] = (byN[u.nation_id] || 0) + 1;
         let idx = 0;
-        for (const [nid, count] of Object.entries(byNation)) {
-          const n   = nations[nid];
-          const col = n?.color ?? "#888";
+        for (const [nid, cnt] of Object.entries(byN)) {
+          const col = nations[nid]?.color ?? "#888";
           const dy  = c[1] + idx * 18;
-          ctx.beginPath();
-          ctx.arc(c[0], dy, 7, 0, Math.PI * 2);
-          ctx.fillStyle   = col;
-          ctx.fill();
+          ctx.beginPath(); ctx.arc(c[0], dy, 7, 0, Math.PI * 2);
+          ctx.fillStyle = col; ctx.fill();
           ctx.strokeStyle = nid !== myNation?.id ? "#ff4444" : "#fff";
-          ctx.lineWidth   = 1.5;
-          ctx.stroke();
-          ctx.fillStyle    = "#fff";
-          ctx.font         = "bold 7px monospace";
-          ctx.textAlign    = "center";
-          ctx.textBaseline = "middle";
-          ctx.fillText(String(count), c[0], dy);
+          ctx.lineWidth = 1.5; ctx.stroke();
+          ctx.fillStyle = "#fff"; ctx.font = "bold 7px monospace";
+          ctx.textAlign = "center"; ctx.textBaseline = "middle";
+          ctx.fillText(String(cnt), c[0], dy);
           idx++;
         }
       }
@@ -241,35 +220,27 @@ export default function GameMap() {
       const pad = 8, w = 170, h = tt.owner ? 46 : 28;
       const tx = Math.min(tt.x + 14, W - w - 4);
       const ty = Math.min(tt.y + 14, H - h - 4);
-      ctx.fillStyle   = "rgba(6,10,22,0.94)";
-      ctx.strokeStyle = "rgba(255,255,255,0.13)";
-      ctx.lineWidth   = 1;
-      ctx.beginPath();
-      ctx.roundRect(tx, ty, w, h, 5);
+      ctx.fillStyle = "rgba(6,10,22,0.94)"; ctx.strokeStyle = "rgba(255,255,255,0.13)";
+      ctx.lineWidth = 1; ctx.beginPath(); ctx.roundRect(tx, ty, w, h, 5);
       ctx.fill(); ctx.stroke();
-      ctx.fillStyle    = "#f9fafb";
-      ctx.font         = "11px monospace";
-      ctx.textAlign    = "left";
-      ctx.textBaseline = "top";
+      ctx.fillStyle = "#f9fafb"; ctx.font = "11px monospace";
+      ctx.textAlign = "left"; ctx.textBaseline = "top";
       ctx.fillText(tt.name, tx + pad, ty + 7);
       if (tt.owner) {
-        ctx.fillStyle = "#9ca3af";
-        ctx.font      = "10px monospace";
+        ctx.fillStyle = "#9ca3af"; ctx.font = "10px monospace";
         ctx.fillText(`Owner: ${tt.owner}`, tx + pad, ty + 26);
       }
     }
 
     // Coords
     const rot = rotateRef.current;
-    ctx.fillStyle    = "rgba(255,255,255,0.15)";
-    ctx.font         = "10px monospace";
-    ctx.textAlign    = "right";
-    ctx.textBaseline = "bottom";
+    ctx.fillStyle = "rgba(255,255,255,0.15)"; ctx.font = "10px monospace";
+    ctx.textAlign = "right"; ctx.textBaseline = "bottom";
     ctx.fillText(`${(-rot[1]).toFixed(1)}°N  ${(-rot[0]).toFixed(1)}°E`, W - 10, H - 10);
 
   }, [nations, provinces, units, myNation, selectedProvinceId, getColor]);
 
-  // ── Hit test ──────────────────────────────────────────────
+  // Hit test
   const hitTest = useCallback((mx: number, my: number) => {
     const canvas = canvasRef.current;
     const geo    = geoRef.current;
@@ -277,19 +248,21 @@ export default function GameMap() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
-    const projection = geoOrthographic()
+    const proj = geoOrthographic()
       .scale(scaleRef.current)
       .translate([canvas.width / 2, canvas.height / 2])
       .rotate(rotateRef.current)
       .clipAngle(90);
 
-    const p = geoPath(projection, ctx);
-    for (const feature of geo.features) {
+    const p = geoPath(proj, ctx);
+    // Iterate in reverse so smaller/top countries win over large background ones
+    for (let i = geo.features.length - 1; i >= 0; i--) {
+      const feature = geo.features[i];
       ctx.beginPath();
       p(feature as GeoPermissibleObjects);
       if (ctx.isPointInPath(mx, my)) {
         const tag      = getTag(feature.properties);
-        const name     = getName(feature.properties, tag);
+        const name     = getName(feature.properties);
         const province = Object.values(provinces).find(pr => pr.province_key === tag);
         const owner    = province?.owner_nation_id
           ? (nations[province.owner_nation_id]?.name ?? "") : "";
@@ -299,7 +272,7 @@ export default function GameMap() {
     return null;
   }, [provinces, nations]);
 
-  // ── Canvas setup ──────────────────────────────────────────
+  // Setup
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -324,27 +297,20 @@ export default function GameMap() {
 
     const onDown = (e: MouseEvent) => {
       spinRef.current = false;
-      dragRef.current = {
-        active: true, startX: e.clientX, startY: e.clientY,
-        startRot: [...rotateRef.current] as [number, number, number],
-        moved: false,
-      };
+      dragRef.current = { active: true, startX: e.clientX, startY: e.clientY, startRot: [...rotateRef.current] as [number,number,number], moved: false };
     };
     const onMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
+      const mx = e.clientX - rect.left, my = e.clientY - rect.top;
       if (dragRef.current.active) {
         const dx = (e.clientX - dragRef.current.startX) * ROTATE_SPEED;
         const dy = (e.clientY - dragRef.current.startY) * ROTATE_SPEED;
         if (Math.abs(dx) > 1 || Math.abs(dy) > 1) dragRef.current.moved = true;
         rotateRef.current = [
           dragRef.current.startRot[0] + dx,
-          Math.max(-85, Math.min(85, dragRef.current.startRot[1] - dy)),
-          0,
+          Math.max(-85, Math.min(85, dragRef.current.startRot[1] - dy)), 0,
         ];
-        tooltipRef.current = null;
-        draw();
+        tooltipRef.current = null; draw();
       } else {
         const hit = hitTest(mx, my);
         tooltipRef.current = hit ? { name: hit.name, owner: hit.owner, x: mx, y: my } : null;
@@ -364,10 +330,8 @@ export default function GameMap() {
       }
     };
     const onWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      spinRef.current = false;
-      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE,
-        scaleRef.current * (e.deltaY < 0 ? 1.1 : 0.9)));
+      e.preventDefault(); spinRef.current = false;
+      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scaleRef.current * (e.deltaY < 0 ? 1.1 : 0.9)));
       draw();
     };
 
