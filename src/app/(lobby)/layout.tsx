@@ -1,26 +1,12 @@
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
-import { redirect } from "next/navigation";
 import { SignOutButton } from "@/components/game/SignOutButton";
+import { LobbyUsername } from "@/components/game/LobbyUsername";
 
-export default async function LobbyLayout({
+export default function LobbyLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  let username = "Commander";
-
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    const supabase = await createClient();
-    const { data, error } = await supabase.auth.getUser();
-
-    if (error || !data.user) {
-      redirect("/login");
-    }
-
-    username = data.user.user_metadata?.username || data.user.email?.split("@")[0] || "Commander";
-  }
-
   return (
     <div className="min-h-screen flex flex-col">
       <header className="border-b border-[var(--border)] px-6 py-3 flex items-center justify-between">
@@ -28,9 +14,7 @@ export default async function LobbyLayout({
           <span className="text-[var(--primary)]">Rise</span> of Fronts
         </Link>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-[var(--muted-foreground)]">
-            {username}
-          </span>
+          <LobbyUsername />
           <SignOutButton />
         </div>
       </header>
