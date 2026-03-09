@@ -87,7 +87,7 @@ export function NationPanel() {
                 <div key={u.id} className="flex justify-between items-center py-0.5">
                   <span className="text-white/70 capitalize">{u.unit_type.replace(/_/g, " ")}</span>
                   <span className="text-white/50 font-mono text-xs">
-                    {u.strength}/{u.max_strength}
+                    {u.strength}/1000
                   </span>
                 </div>
               ))}
