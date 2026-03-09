@@ -104,14 +104,16 @@ export default function GameMap() {
       if (ownerNation) fillColor = parseInt(ownerNation.color.replace("#", ""), 16);
 
       const geom = feature.geometry;
-      const polygons: number[][][][] = geom.type === "Polygon"
-        ? [[geom.coordinates as number[][][]]]
-        : (geom.coordinates as number[][][][]).map((p) => [p]);
+      // Normalise both Polygon and MultiPolygon into an array of rings
+      const allRings: number[][][] =
+        geom.type === "Polygon"
+          ? (geom.coordinates as number[][][])
+          : (geom.coordinates as number[][][][]).flat(1);
 
       // We draw each polygon ring as a separate graphics object
-      for (const poly of polygons) {
-        for (let ri = 0; ri < poly[0].length; ri++) {
-          const ring = poly[0][ri];
+      for (const rings of [allRings]) {
+        for (let ri = 0; ri < rings.length; ri++) {
+          const ring = rings[ri];
           const pts = ringToPoints(ring);
           if (pts.length < 6) continue;
 
