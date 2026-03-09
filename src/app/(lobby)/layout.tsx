@@ -11,14 +11,21 @@ export default async function LobbyLayout({
   let username = "Commander";
 
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
+    try {
+      const supabase = await createClient();
+      const { data: { user } } = await supabase.auth.getUser();
 
-    if (!user) {
-      redirect("/login");
+      if (!user) {
+        redirect("/login");
+      }
+
+      username = user.user_metadata?.username || user.email?.split("@")[0] || "Commander";
+    } catch (err: unknown) {
+      // Re-throw redirect errors (Next.js uses thrown errors for redirects)
+      const message = err instanceof Error ? err.message : "";
+      if (message.includes("NEXT_REDIRECT")) throw err;
+      // Swallow other auth errors — layout still renders
     }
-
-    username = user.user_metadata?.username || user.email?.split("@")[0] || "Commander";
   }
 
   return (
