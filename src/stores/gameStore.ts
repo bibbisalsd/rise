@@ -3,6 +3,8 @@ import type { Nation } from "@/types/nation";
 import type { Province } from "@/types/map";
 import type { Unit } from "@/types/military";
 import type { GameSession } from "@/types/game";
+import type { TechResearch } from "@/types/tech";
+import type { ResourceStockpile } from "@/types/economy";
 
 // ─── UI State ───────────────────────────────────────────────
 export type ActivePanel = "country" | "diplomacy" | "economy" | "technology" | "military" | null;
@@ -42,6 +44,16 @@ interface GameStore {
   setUnits: (units: Unit[]) => void;
   updateUnit: (unit: Unit) => void;
   removeUnit: (id: string) => void;
+
+  // Tech Research
+  techResearch: Record<string, TechResearch>;
+  setTechResearch: (techs: TechResearch[]) => void;
+  updateTechResearch: (tech: TechResearch) => void;
+
+  // Resource Stockpiles
+  resourceStockpiles: Record<string, ResourceStockpile>;
+  setResourceStockpiles: (resources: ResourceStockpile[]) => void;
+  updateResourceStockpile: (resource: ResourceStockpile) => void;
 
   // Selection
   selectedProvinceId: string | null;
@@ -109,6 +121,22 @@ export const useGameStore = create<GameStore>((set) => ({
       delete units[id];
       return { units };
     }),
+
+  // Tech Research
+  techResearch: {},
+  setTechResearch: (techs) =>
+    set({ techResearch: Object.fromEntries(techs.map((t) => [t.tech_id, t])) }),
+  updateTechResearch: (tech) =>
+    set((s) => ({ techResearch: { ...s.techResearch, [tech.tech_id]: tech } })),
+
+  // Resource Stockpiles
+  resourceStockpiles: {},
+  setResourceStockpiles: (resources) =>
+    set({ resourceStockpiles: Object.fromEntries(resources.map((r) => [r.resource_type, r])) }),
+  updateResourceStockpile: (resource) =>
+    set((s) => ({
+      resourceStockpiles: { ...s.resourceStockpiles, [resource.resource_type]: resource },
+    })),
 
   // Selection
   selectedProvinceId: null,

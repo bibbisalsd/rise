@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useTransition } from "react";
 import { useGameStore } from "@/stores/gameStore";
 import { UNIT_DEFINITIONS } from "@/data/units";
+import { trainUnit } from "@/lib/actions/militaryActions";
 import type { Unit } from "@/types/military";
 
 const DOMAIN_META: Record<string, { icon: string; label: string }> = {
@@ -15,9 +16,11 @@ const DOMAIN_META: Record<string, { icon: string; label: string }> = {
 type Tab = "overview" | "units" | "codex";
 
 export function MilitaryPanel() {
-  const { myNation, units } = useGameStore();
+  const { myNation, units, provinces } = useGameStore();
   const [activeTab, setActiveTab] = useState<Tab>("overview");
   const [expandedCodexId, setExpandedCodexId] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
 
   if (!myNation) {
     return (
@@ -28,6 +31,7 @@ export function MilitaryPanel() {
   }
 
   const myUnits = Object.values(units).filter((u) => u.nation_id === myNation.id);
+  const myProvinces = Object.values(provinces).filter((p) => p.owner_nation_id === myNation.id);
 
   const domainCounts: Record<string, number> = {};
   for (const u of myUnits) {
@@ -38,8 +42,35 @@ export function MilitaryPanel() {
 
   const combatUnits = myUnits.filter((u) => u.in_combat);
 
+  function handleTrain(unitType: string) {
+    if (!myNation) return;
+    // Pick a province to train in (first owned province, or capital)
+    const trainProvince = myProvinces[0];
+    if (!trainProvince) {
+      setMessage("No owned provinces to train in.");
+      return;
+    }
+    setMessage(null);
+    startTransition(async () => {
+      try {
+        await trainUnit(myNation.id, trainProvince.id, unitType);
+        setMessage(`Training ${UNIT_DEFINITIONS[unitType]?.name ?? unitType}!`);
+        setTimeout(() => setMessage(null), 2000);
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Failed to train unit.");
+      }
+    });
+  }
+
   return (
     <div className="flex flex-col h-full overflow-y-auto text-sm">
+      {/* Message */}
+      {message && (
+        <div className="px-4 py-2 text-xs text-center text-yellow-300 bg-yellow-400/10">
+          {message}
+        </div>
+      )}
+
       {/* Tab Selector */}
       <div className="px-4 py-2 flex gap-1 border-b border-white/10">
         {(["overview", "units", "codex"] as Tab[]).map((tab) => (
@@ -67,7 +98,7 @@ export function MilitaryPanel() {
               label="Conscription"
               value={capitalize(myNation.conscription_law.replace(/_/g, " "))}
             />
-            <StatRow label="Military Spending" value={`${myNation.spending.military}%`} />
+            <StatRow label="Military Spending" value={`${myNation.spending.military}/10`} />
             <StatRow label="Total Units" value={String(myUnits.length)} />
           </div>
 
@@ -116,7 +147,7 @@ export function MilitaryPanel() {
         <div className="px-4 py-3 space-y-1">
           {myUnits.length === 0 ? (
             <p className="text-white/30 text-xs italic mt-4 text-center">
-              No units deployed.
+              No units deployed. Train units from the Codex tab.
             </p>
           ) : (
             myUnits
@@ -145,9 +176,11 @@ export function MilitaryPanel() {
                     key={def.type}
                     def={def}
                     isExpanded={expandedCodexId === def.type}
+                    isPending={isPending}
                     onToggle={() =>
                       setExpandedCodexId(expandedCodexId === def.type ? null : def.type)
                     }
+                    onTrain={() => handleTrain(def.type)}
                   />
                 ))}
               </div>
@@ -191,11 +224,15 @@ function UnitRow({ unit }: { unit: Unit }) {
   const maxStr = def?.base_strength ?? 1000;
   const strPct = (unit.strength / maxStr) * 100;
   const strColor = strPct > 60 ? "#22c55e" : strPct > 30 ? "#f97316" : "#ef4444";
+  const isTraining = unit.strength === 0;
 
   return (
     <div className="py-1.5 border-b border-white/5 space-y-1">
       <div className="flex items-center gap-2">
         <span className="text-white/80 text-xs truncate flex-1">{name}</span>
+        {isTraining && (
+          <span className="text-[9px] bg-yellow-500/20 text-yellow-400 rounded px-1">TRAINING</span>
+        )}
         {unit.in_combat && (
           <span className="text-[9px] bg-red-500/20 text-red-400 rounded px-1">COMBAT</span>
         )}
@@ -224,11 +261,15 @@ function UnitRow({ unit }: { unit: Unit }) {
 function CodexEntry({
   def,
   isExpanded,
+  isPending,
   onToggle,
+  onTrain,
 }: {
   def: (typeof UNIT_DEFINITIONS)[string];
   isExpanded: boolean;
+  isPending: boolean;
   onToggle: () => void;
+  onTrain: () => void;
 }) {
   return (
     <div
@@ -273,6 +314,15 @@ function CodexEntry({
               Abilities: {def.special_abilities.map((a) => capitalize(a.replace(/_/g, " "))).join(", ")}
             </p>
           )}
+
+          {/* Train button */}
+          <button
+            onClick={(e) => { e.stopPropagation(); onTrain(); }}
+            disabled={isPending}
+            className="mt-1 px-3 py-1 bg-green-500/20 text-green-300 text-[10px] font-medium rounded hover:bg-green-500/30 transition-colors disabled:opacity-50"
+          >
+            {isPending ? "..." : `Train ($${def.gold_cost.toLocaleString()} / ${def.manpower_cost.toLocaleString()} MP)`}
+          </button>
         </div>
       )}
     </div>

@@ -6,13 +6,61 @@ import { useGameStore } from "@/stores/gameStore";
 import type { Nation } from "@/types/nation";
 import type { Province } from "@/types/map";
 import type { Unit } from "@/types/military";
-import type { GameSession } from "@/types/game";
+import type { GameSession, SpendingSliders } from "@/types/game";
+import type { TechResearch } from "@/types/tech";
+import type { ResourceStockpile } from "@/types/economy";
+
+/**
+ * Map flat spending columns from DB to the nested SpendingSliders object.
+ * DB stores: spending_military, spending_government, etc. (INT 0-10)
+ * TypeScript expects: spending: { military: number, ... }
+ */
+function mapNationFromDB(row: Record<string, unknown>): Nation {
+  const spending: SpendingSliders = {
+    military: (row.spending_military as number) ?? 5,
+    government: (row.spending_government as number) ?? 5,
+    security: (row.spending_security as number) ?? 5,
+    education: (row.spending_education as number) ?? 5,
+    anti_corruption: (row.spending_anti_corruption as number) ?? 5,
+    healthcare: (row.spending_healthcare as number) ?? 5,
+    research: (row.spending_research as number) ?? 5,
+    reconstruction: (row.spending_reconstruction as number) ?? 5,
+  };
+
+  return {
+    id: row.id as string,
+    session_id: row.session_id as string,
+    user_id: (row.user_id as string) ?? null,
+    name: row.name as string,
+    tag: row.tag as string,
+    color: row.color as string,
+    flag_sprite: (row.flag_sprite as string) ?? null,
+    is_ai: row.is_ai as boolean,
+    population: row.population as number,
+    manpower_pool: row.manpower_pool as number,
+    stability: row.stability as number,
+    corruption: row.corruption as number,
+    war_exhaustion: row.war_exhaustion as number,
+    political_power: row.political_power as number,
+    research_power: row.research_power as number,
+    treasury: row.treasury as number,
+    taxation_setting: row.taxation_setting as Nation["taxation_setting"],
+    conscription_law: row.conscription_law as Nation["conscription_law"],
+    spending,
+    ideology_id: row.ideology_id as Nation["ideology_id"],
+    leader_name: (row.leader_name as string) ?? null,
+    leader_traits: (row.leader_traits as string[]) ?? [],
+    victory_points: row.victory_points as number,
+  };
+}
 
 export function useGameSession(sessionId: string) {
   const supabase = createClient();
   const {
     setSession, setMyNation, setNations, setProvinces, setUnits,
     updateNation, updateProvince, updateUnit, removeUnit,
+    setTechResearch, updateTechResearch,
+    setResourceStockpiles, updateResourceStockpile,
     setGameDate, setCurrentTick, setIsLoading, setError,
   } = useGameStore();
 
@@ -48,17 +96,18 @@ export function useGameSession(sessionId: string) {
         // 2. Load my user
         const { data: { user } } = await supabase.auth.getUser();
 
-        // 3. Load all nations
-        const { data: nations, error: nErr } = await supabase
+        // 3. Load all nations (map flat spending columns to nested object)
+        const { data: nationsRaw, error: nErr } = await supabase
           .from("nations")
           .select("*")
           .eq("session_id", sessionId);
         if (nErr) throw new Error(nErr.message);
-        if (!cancelled && nations) {
-          setNations(nations as Nation[]);
+        if (!cancelled && nationsRaw) {
+          const nations = nationsRaw.map((row) => mapNationFromDB(row as Record<string, unknown>));
+          setNations(nations);
           if (user) {
             const mine = nations.find((n) => n.user_id === user.id);
-            if (mine) setMyNation(mine as Nation);
+            if (mine) setMyNation(mine);
           }
         }
 
@@ -77,6 +126,31 @@ export function useGameSession(sessionId: string) {
           .eq("session_id", sessionId);
         if (uErr) throw new Error(uErr.message);
         if (!cancelled && units) setUnits(units as Unit[]);
+
+        // 6. Load tech research (for my nation)
+        if (user) {
+          const myNationRow = nationsRaw?.find((n: Record<string, unknown>) => n.user_id === user.id);
+          if (myNationRow) {
+            const nationId = (myNationRow as Record<string, unknown>).id as string;
+
+            const { data: techs, error: tErr } = await supabase
+              .from("tech_research")
+              .select("*")
+              .eq("session_id", sessionId)
+              .eq("nation_id", nationId);
+            if (tErr) console.error("Tech research fetch error:", tErr);
+            if (!cancelled && techs) setTechResearch(techs as TechResearch[]);
+
+            // 7. Load resource stockpiles (for my nation)
+            const { data: resources, error: rErr } = await supabase
+              .from("resource_stockpiles")
+              .select("*")
+              .eq("session_id", sessionId)
+              .eq("nation_id", nationId);
+            if (rErr) console.error("Resource stockpiles fetch error:", rErr);
+            if (!cancelled && resources) setResourceStockpiles(resources as ResourceStockpile[]);
+          }
+        }
 
       } catch (err) {
         if (!cancelled) {
@@ -97,12 +171,14 @@ export function useGameSession(sessionId: string) {
     const channel = supabase
       .channel(`game:${sessionId}`)
 
-      // Nations changing (treasury, stability, etc.)
+      // Nations changing (treasury, stability, spending, etc.)
       .on("postgres_changes", {
         event: "*", schema: "public", table: "nations",
         filter: `session_id=eq.${sessionId}`,
       }, (payload) => {
-        if (payload.eventType === "UPDATE") updateNation(payload.new as Nation);
+        if (payload.eventType === "UPDATE") {
+          updateNation(mapNationFromDB(payload.new as Record<string, unknown>));
+        }
       })
 
       // Province ownership changing
@@ -131,6 +207,26 @@ export function useGameSession(sessionId: string) {
         filter: `session_id=eq.${sessionId}`,
       }, (payload) => {
         removeUnit(payload.old.id);
+      })
+
+      // Tech research updates
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "tech_research",
+        filter: `session_id=eq.${sessionId}`,
+      }, (payload) => {
+        if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
+          updateTechResearch(payload.new as TechResearch);
+        }
+      })
+
+      // Resource stockpile updates
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "resource_stockpiles",
+        filter: `session_id=eq.${sessionId}`,
+      }, (payload) => {
+        if (payload.eventType === "UPDATE" || payload.eventType === "INSERT") {
+          updateResourceStockpile(payload.new as ResourceStockpile);
+        }
       })
 
       // Session tick/date updates

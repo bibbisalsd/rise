@@ -1,10 +1,15 @@
 "use client";
 
+import { useState, useTransition } from "react";
 import { useGameStore } from "@/stores/gameStore";
 import { IDEOLOGY_DEFINITIONS } from "@/data/ideologies";
+import { justifyWar, proposeTrade, proposeAlliance } from "@/lib/actions/diplomacyActions";
 
 export function DiplomacyPanel() {
   const { myNation, nations } = useGameStore();
+  const [selectedNationId, setSelectedNationId] = useState<string | null>(null);
+  const [isPending, startTransition] = useTransition();
+  const [message, setMessage] = useState<string | null>(null);
 
   if (!myNation) {
     return (
@@ -16,9 +21,45 @@ export function DiplomacyPanel() {
 
   const ideology = IDEOLOGY_DEFINITIONS[myNation.ideology_id];
   const otherNations = Object.values(nations).filter((n) => n.id !== myNation.id);
+  const selectedTarget = selectedNationId
+    ? nations[selectedNationId]
+    : null;
+
+  function handleAction(action: string) {
+    if (!myNation || !selectedNationId) return;
+    setMessage(null);
+    startTransition(async () => {
+      try {
+        switch (action) {
+          case "justify_war":
+            await justifyWar(myNation.id, selectedNationId);
+            setMessage("War justification started!");
+            break;
+          case "propose_trade":
+            await proposeTrade(myNation.id, selectedNationId, {}, 0, {}, 0);
+            setMessage("Trade proposal sent!");
+            break;
+          case "propose_alliance":
+            await proposeAlliance(myNation.id, selectedNationId, "defensive");
+            setMessage("Alliance proposed!");
+            break;
+        }
+        setTimeout(() => setMessage(null), 2000);
+      } catch (err) {
+        setMessage(err instanceof Error ? err.message : "Action failed.");
+      }
+    });
+  }
 
   return (
     <div className="flex flex-col h-full overflow-y-auto text-sm">
+      {/* Message */}
+      {message && (
+        <div className="px-4 py-2 text-xs text-center text-yellow-300 bg-yellow-400/10">
+          {message}
+        </div>
+      )}
+
       {/* My Ideology */}
       <div className="px-4 py-3 space-y-2 border-b border-white/10">
         <SectionHeader title="Government" />
@@ -70,10 +111,16 @@ export function DiplomacyPanel() {
           {otherNations.map((nation) => {
             const theirIdeology = IDEOLOGY_DEFINITIONS[nation.ideology_id];
             const compat = getCompatibility(myNation.ideology_id, nation.ideology_id);
+            const isSelected = selectedNationId === nation.id;
             return (
               <div
                 key={nation.id}
-                className="flex items-center gap-2 py-1 px-1 rounded hover:bg-white/5"
+                onClick={() => setSelectedNationId(isSelected ? null : nation.id)}
+                className={`flex items-center gap-2 py-1 px-1 rounded cursor-pointer transition-all ${
+                  isSelected
+                    ? "bg-yellow-400/10 border border-yellow-400/30"
+                    : "hover:bg-white/5"
+                }`}
               >
                 <div
                   className="w-3 h-3 rounded-sm shrink-0"
@@ -103,43 +150,69 @@ export function DiplomacyPanel() {
         </div>
       </div>
 
-      {/* Wars & Alliances */}
-      <div className="px-4 py-3 space-y-3 border-b border-white/10">
-        <div>
-          <SectionHeader title="Wars" />
-          <p className="text-white/20 text-xs italic">Available in Phase 2</p>
-        </div>
-        <div>
-          <SectionHeader title="Alliances" />
-          <p className="text-white/20 text-xs italic">Available in Phase 2</p>
-        </div>
-        <div>
-          <SectionHeader title="Trade Deals" />
-          <p className="text-white/20 text-xs italic">Available in Phase 2</p>
-        </div>
-      </div>
-
-      {/* Diplomatic Actions */}
+      {/* Diplomatic Actions (now interactive!) */}
       <div className="px-4 py-3 space-y-2">
         <SectionHeader title="Actions" />
-        <div className="flex flex-wrap gap-1.5">
-          {["Justify War", "Propose Alliance", "Propose Trade", "Send Ultimatum"].map((action) => (
-            <button
-              key={action}
-              disabled
-              className="text-white/20 bg-white/5 rounded px-2 py-1 text-xs cursor-not-allowed"
-              title="Available in Phase 2"
-            >
-              {action}
-            </button>
-          ))}
-        </div>
+        {selectedTarget ? (
+          <>
+            <p className="text-xs text-white/60 mb-2">
+              Target: <span className="text-white font-medium">{selectedTarget.name}</span>
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              <ActionButton
+                label="Justify War"
+                sublabel="50 PP"
+                onClick={() => handleAction("justify_war")}
+                disabled={isPending || myNation.political_power < 50}
+                color="red"
+              />
+              <ActionButton
+                label="Propose Trade"
+                onClick={() => handleAction("propose_trade")}
+                disabled={isPending}
+                color="green"
+              />
+              <ActionButton
+                label="Propose Alliance"
+                onClick={() => handleAction("propose_alliance")}
+                disabled={isPending}
+                color="blue"
+              />
+            </div>
+          </>
+        ) : (
+          <p className="text-white/30 text-xs italic">
+            Select a nation above to take diplomatic actions.
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
 // ── Sub-components ──────────────────────────────────────────
+
+function ActionButton({
+  label, sublabel, onClick, disabled, color,
+}: {
+  label: string; sublabel?: string; onClick: () => void; disabled: boolean; color: string;
+}) {
+  const colorMap: Record<string, string> = {
+    red: "bg-red-500/20 text-red-300 hover:bg-red-500/30",
+    green: "bg-green-500/20 text-green-300 hover:bg-green-500/30",
+    blue: "bg-blue-500/20 text-blue-300 hover:bg-blue-500/30",
+  };
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      className={`${colorMap[color] ?? colorMap.blue} rounded px-2 py-1 text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed`}
+    >
+      {label}
+      {sublabel && <span className="text-[9px] opacity-60 ml-1">({sublabel})</span>}
+    </button>
+  );
+}
 
 function SectionHeader({ title }: { title: string }) {
   return <p className="text-xs text-white/40 uppercase tracking-widest mb-1">{title}</p>;

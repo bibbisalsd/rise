@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import dynamic from "next/dynamic";
 import { useGameSession } from "@/hooks/useGameSession";
 import { useGameStore } from "@/stores/gameStore";
@@ -88,11 +89,12 @@ export default function GamePageClient({ sessionId }: { sessionId: string }) {
         {/* Spacer */}
         <div className="flex-1" />
 
-        {/* Game clock */}
+        {/* Game clock + Tick button */}
         <div className="flex items-center gap-3 shrink-0">
           {isLoading && (
             <span className="text-xs text-white/30 animate-pulse">syncing...</span>
           )}
+          <TickButton />
           <span className="text-xs text-white/40 font-mono">Tick {currentTick}</span>
           <span className="text-sm font-mono text-white/80 bg-white/5 px-2 py-1 rounded">
             📅 {gameDate}
@@ -174,6 +176,33 @@ function QuickStat({
   );
 }
 
+
+function TickButton() {
+  const [ticking, setTicking] = useState(false);
+
+  async function handleTick() {
+    setTicking(true);
+    try {
+      await fetch("/api/tick", { method: "POST" });
+    } catch (err) {
+      console.error("Tick failed:", err);
+    } finally {
+      setTicking(false);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleTick}
+      disabled={ticking}
+      className="px-2 py-1 bg-green-500/20 text-green-300 text-[10px] font-bold rounded
+                 hover:bg-green-500/30 transition-colors disabled:opacity-50 shrink-0"
+      title="Advance game by 1 tick (dev)"
+    >
+      {ticking ? "..." : "▶ TICK"}
+    </button>
+  );
+}
 
 function abbreviate(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
