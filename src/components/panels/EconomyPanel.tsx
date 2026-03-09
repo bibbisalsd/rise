@@ -62,7 +62,7 @@ export function EconomyPanel() {
   const ideology = IDEOLOGY_DEFINITIONS[myNation.ideology_id];
   const mods = ideology?.modifiers ?? {};
   const totalSpending = SPENDING_KEYS.reduce(
-    (sum, k) => sum + ((myNation.spending as Record<string, number>)[k] ?? 0), 0
+    (sum, k) => sum + (myNation.spending[k] ?? 0), 0
   );
 
   return (
@@ -93,7 +93,7 @@ export function EconomyPanel() {
       <div className="px-4 py-3 space-y-1.5 border-b border-white/10">
         <SectionHeader title="Budget Allocation" />
         {SPENDING_KEYS.map((key) => {
-          const val = (myNation.spending as Record<string, number>)[key] ?? 0;
+          const val = myNation.spending[key] ?? 0;
           return (
             <div key={key} className="space-y-0.5">
               <div className="flex justify-between text-xs">
