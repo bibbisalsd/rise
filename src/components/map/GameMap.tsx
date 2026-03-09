@@ -63,23 +63,7 @@ function getAdm1Code(p: Record<string, unknown>): string {
   return String(p.adm1_code ?? p.ADM1_CODE ?? "").trim() || "UNK";
 }
 
-/** The GeoJSON file has CW outer rings. d3-geo requires RFC7946 CCW outer rings.
- *  We must rewind: reverse each ring so outer rings become CCW. */
-function rewindForD3(geojson: GeoJSON): GeoJSON {
-  return {
-    ...geojson,
-    features: geojson.features.map((f) => {
-      const g = f.geometry as any;
-      if (g.type === "Polygon") {
-        return { ...f, geometry: { ...g, coordinates: g.coordinates.map((r: number[][]) => r.slice().reverse()) } };
-      }
-      if (g.type === "MultiPolygon") {
-        return { ...f, geometry: { ...g, coordinates: g.coordinates.map((poly: number[][][]) => poly.map((r: number[][]) => r.slice().reverse())) } };
-      }
-      return f;
-    }),
-  };
-}
+// No rewind needed — world-adm1.geojson winding is already correct for d3-geo
 function getName(p: Record<string, unknown>): string {
   return String(p.name ?? p.NAME ?? p.admin ?? "Unknown");
 }
@@ -367,13 +351,13 @@ export default function GameMap() {
     canvas.addEventListener("mouseleave", () => { tooltipRef.current = null; draw(); });
     canvas.addEventListener("dblclick",   () => { spinRef.current = true; });
 
-    // Load data — rewind CW→CCW so d3-geo renders polygons correctly
+    // Load data
     Promise.all([
       fetch("/maps/world-adm1.geojson").then(r => r.ok ? r.json() : null),
       fetch("/data/biomes.json").then(r => r.ok ? r.json() : {}),
       fetch("/data/resource_deposits.json").then(r => r.ok ? r.json() : {}),
     ]).then(([geo, biomes, resources]) => {
-      if (geo)       geoRef.current       = rewindForD3(geo);
+      if (geo)       geoRef.current       = geo;
       if (biomes)    biomesRef.current    = biomes;
       if (resources) resourcesRef.current = resources;
       draw();
