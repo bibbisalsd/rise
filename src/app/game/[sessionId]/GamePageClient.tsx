@@ -4,6 +4,10 @@ import dynamic from "next/dynamic";
 import { useGameSession } from "@/hooks/useGameSession";
 import { useGameStore } from "@/stores/gameStore";
 import { NationPanel } from "@/components/panels/NationPanel";
+import { EconomyPanel } from "@/components/panels/EconomyPanel";
+import { TechnologyPanel } from "@/components/panels/TechnologyPanel";
+import { MilitaryPanel } from "@/components/panels/MilitaryPanel";
+import { DiplomacyPanel } from "@/components/panels/DiplomacyPanel";
 
 // PixiJS must be client-only — no SSR
 const GameMap = dynamic(() => import("@/components/map/GameMap"), {
@@ -143,10 +147,10 @@ export default function GamePageClient({ sessionId }: { sessionId: string }) {
 
           {/* Panel content based on active tab */}
           {(activePanel === "country" || !activePanel) && <NationPanel />}
-          {activePanel === "diplomacy" && <PlaceholderPanel title="Diplomacy" icon="🤝" description="Phase 1C" />}
-          {activePanel === "economy"   && <PlaceholderPanel title="Economy"   icon="💰" description="Phase 1C" />}
-          {activePanel === "technology"&& <PlaceholderPanel title="Technology" icon="🔬" description="Phase 1C" />}
-          {activePanel === "military"  && <PlaceholderPanel title="Military"  icon="⚔️"  description="Phase 1C" />}
+          {activePanel === "diplomacy" && <DiplomacyPanel />}
+          {activePanel === "economy"   && <EconomyPanel />}
+          {activePanel === "technology"&& <TechnologyPanel />}
+          {activePanel === "military"  && <MilitaryPanel />}
         </aside>
       </div>
     </div>
@@ -170,19 +174,6 @@ function QuickStat({
   );
 }
 
-function PlaceholderPanel({
-  title, icon, description,
-}: {
-  title: string; icon: string; description: string;
-}) {
-  return (
-    <div className="flex-1 flex flex-col items-center justify-center gap-2 p-6 text-center">
-      <span className="text-4xl">{icon}</span>
-      <p className="text-white/70 font-semibold">{title}</p>
-      <p className="text-white/30 text-xs">Coming in {description}</p>
-    </div>
-  );
-}
 
 function abbreviate(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
