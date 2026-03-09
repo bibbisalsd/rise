@@ -9,22 +9,16 @@ export default async function LobbyLayout({
   children: React.ReactNode;
 }) {
   let username = "Commander";
-  let user = null;
 
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
-    try {
-      const supabase = await createClient();
-      const { data } = await supabase.auth.getUser();
-      user = data.user;
-    } catch {
-      // Auth check failed — treat as not logged in
-    }
+    const supabase = await createClient();
+    const { data, error } = await supabase.auth.getUser();
 
-    if (!user) {
+    if (error || !data.user) {
       redirect("/login");
     }
 
-    username = user.user_metadata?.username || user.email?.split("@")[0] || "Commander";
+    username = data.user.user_metadata?.username || data.user.email?.split("@")[0] || "Commander";
   }
 
   return (
