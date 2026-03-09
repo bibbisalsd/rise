@@ -89,6 +89,7 @@ export default function LobbyPage() {
   const filteredNations = useMemo(() => {
     const q = search.toLowerCase().trim();
     const filtered = NATION_DEFINITIONS.filter((n) => {
+      if (n.formable) return false; // Exclude formable nations (not starting nations)
       if (takenTags.includes(n.tag)) return false;
       if (!q) return true;
       return n.name.toLowerCase().includes(q) ||

@@ -33,14 +33,16 @@ export default function CreateGamePage() {
   // Filter & group nations by tier (6→1)
   const filteredNations = useMemo(() => {
     const q = search.toLowerCase().trim();
+    // Exclude formable nations (Roman Empire, Soviet Union, etc.) — not starting nations
+    const playable = NATION_DEFINITIONS.filter((n) => !n.formable);
     const filtered = q
-      ? NATION_DEFINITIONS.filter(
+      ? playable.filter(
           (n) =>
             n.name.toLowerCase().includes(q) ||
             n.tag.toLowerCase().includes(q) ||
             n.region.toLowerCase().includes(q)
         )
-      : NATION_DEFINITIONS;
+      : playable;
 
     const groups: { tier: number; label: string; nations: NationDef[] }[] = [];
     for (const tier of [6, 5, 4, 3, 2, 1]) {
