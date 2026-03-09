@@ -9,7 +9,6 @@ import {
   GeoPermissibleObjects,
 } from "d3-geo";
 
-// ─── Types ───────────────────────────────────────────────────
 interface GeoFeature {
   type: "Feature";
   properties: Record<string, unknown>;
@@ -20,22 +19,32 @@ interface GeoJSON {
   features: GeoFeature[];
 }
 
-// ─── Constants ───────────────────────────────────────────────
-const MIN_SCALE = 80;
-const MAX_SCALE = 2000;
+const MIN_SCALE    = 80;
+const MAX_SCALE    = 2000;
 const ROTATE_SPEED = 0.4;
-const AUTO_SPIN_SPEED = 0.03;
+const SPIN_SPEED   = 0.025;
+
+// ── Generate a stable muted color from a string (for unclaimed nations) ──
+function tagToColor(tag: string): string {
+  let hash = 0;
+  for (let i = 0; i < tag.length; i++) hash = tag.charCodeAt(i) + ((hash << 5) - hash);
+  // Hue across full spectrum, low-mid saturation, mid lightness
+  const h = ((hash >>> 0) % 360);
+  const s = 28 + ((hash >> 4) & 0xf);   // 28–44%
+  const l = 28 + ((hash >> 8) & 0xf);   // 28–44%
+  return `hsl(${h},${s}%,${l}%)`;
+}
 
 export default function GameMap() {
   const canvasRef  = useRef<HTMLCanvasElement>(null);
   const geoRef     = useRef<GeoJSON | null>(null);
   const rafRef     = useRef<number>(0);
   const spinRef    = useRef(true);
-  const rotateRef  = useRef<[number, number, number]>([0, -20, 0]);
+  const rotateRef  = useRef<[number, number, number]>([0, -25, 0]);
   const scaleRef   = useRef(260);
   const dragRef    = useRef({
     active: false, startX: 0, startY: 0,
-    startRot: [0, -20, 0] as [number, number, number],
+    startRot: [0, -25, 0] as [number, number, number],
     moved: false,
   });
   const tooltipRef = useRef<{ name: string; owner: string; x: number; y: number } | null>(null);
@@ -45,15 +54,30 @@ export default function GameMap() {
     selectedProvinceId, setSelectedProvinceId, setActivePanel,
   } = useGameStore();
 
-  // ─── Get fill color ─────────────────────────────────────
-  const getColor = useCallback((tag: string): string => {
+  // ── Color lookup ───────────────────────────────────────────
+  const getColor = useCallback((tag: string): { color: string; owned: boolean } => {
     const province      = Object.values(provinces).find(p => p.province_key === tag);
     const ownerNationId = province?.owner_nation_id ?? null;
     const ownerNation   = ownerNationId ? nations[ownerNationId] : null;
-    return ownerNation?.color ?? "#3d5a40"; // green-grey for unclaimed land
+    if (ownerNation?.color) return { color: ownerNation.color, owned: true };
+    return { color: tagToColor(tag), owned: false };
   }, [provinces, nations]);
 
-  // ─── Main draw ──────────────────────────────────────────
+  // ── Parse hex or hsl to rgba string ───────────────────────
+  function toRgba(color: string, alpha: number): string {
+    // If hsl, just use it directly with opacity
+    if (color.startsWith("hsl")) {
+      return color.replace("hsl(", `hsla(`).replace(")", `,${alpha})`);
+    }
+    // Hex
+    const c = color.replace("#", "");
+    const r = parseInt(c.slice(0, 2), 16);
+    const g = parseInt(c.slice(2, 4), 16);
+    const b = parseInt(c.slice(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+
+  // ── Draw ──────────────────────────────────────────────────
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const geo    = geoRef.current;
@@ -78,21 +102,18 @@ export default function GameMap() {
 
     ctx.clearRect(0, 0, W, H);
 
-    // Space background
-    const bg = ctx.createRadialGradient(cx, cy, scaleRef.current * 0.1, cx, cy, W * 0.8);
-    bg.addColorStop(0, "#080d1a");
-    bg.addColorStop(1, "#000306");
-    ctx.fillStyle = bg;
+    // Space
+    ctx.fillStyle = "#03060f";
     ctx.fillRect(0, 0, W, H);
 
-    // Stars (seeded so they don't move)
-    ctx.fillStyle = "rgba(255,255,255,0.5)";
-    for (let i = 0; i < 200; i++) {
-      const sx = ((i * 7919) % W);
-      const sy = ((i * 6271) % H);
-      const sr = (i % 3 === 0) ? 1.2 : 0.6;
+    // Stars
+    for (let i = 0; i < 220; i++) {
+      const sx = (i * 7919 + 11) % W;
+      const sy = (i * 6271 + 17) % H;
+      const br = 0.3 + (i % 5) * 0.15;
+      ctx.fillStyle = `rgba(255,255,255,${br})`;
       ctx.beginPath();
-      ctx.arc(sx, sy, sr, 0, Math.PI * 2);
+      ctx.arc(sx, sy, i % 4 === 0 ? 1.1 : 0.55, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -100,20 +121,20 @@ export default function GameMap() {
     ctx.beginPath();
     path(sphere);
     const ocean = ctx.createRadialGradient(
-      cx - scaleRef.current * 0.25, cy - scaleRef.current * 0.25, 0,
+      cx - scaleRef.current * 0.2, cy - scaleRef.current * 0.25, 0,
       cx, cy, scaleRef.current
     );
-    ocean.addColorStop(0, "#1a5080");
-    ocean.addColorStop(0.6, "#0e3560");
-    ocean.addColorStop(1, "#081a35");
+    ocean.addColorStop(0,   "#1e5fa0");
+    ocean.addColorStop(0.5, "#0e3d70");
+    ocean.addColorStop(1,   "#071e3d");
     ctx.fillStyle = ocean;
     ctx.fill();
 
     // Graticule
     ctx.beginPath();
     path(graticule);
-    ctx.strokeStyle = "rgba(120,160,200,0.07)";
-    ctx.lineWidth   = 0.5;
+    ctx.strokeStyle = "rgba(150,190,230,0.06)";
+    ctx.lineWidth   = 0.4;
     ctx.stroke();
 
     // Countries
@@ -123,63 +144,51 @@ export default function GameMap() {
         const province   = Object.values(provinces).find(p => p.province_key === tag);
         const isSelected = province?.id === selectedProvinceId;
         const isMine     = province?.owner_nation_id === myNation?.id;
-        const fillColor  = getColor(tag);
+        const { color }  = getColor(tag);
 
         ctx.beginPath();
         path(feature as GeoPermissibleObjects);
 
-        // Parse hex color
-        const r = parseInt(fillColor.slice(1, 3), 16);
-        const g = parseInt(fillColor.slice(3, 5), 16);
-        const b = parseInt(fillColor.slice(5, 7), 16);
-
-        if (isSelected) {
-          ctx.fillStyle = `rgb(${Math.min(255,r+40)},${Math.min(255,g+40)},${Math.min(255,b+40)})`;
-        } else if (isMine) {
-          ctx.fillStyle = `rgba(${r},${g},${b},0.95)`;
-        } else {
-          ctx.fillStyle = `rgba(${r},${g},${b},0.85)`;
-        }
+        ctx.fillStyle = toRgba(color, isSelected ? 1.0 : isMine ? 0.95 : 0.88);
         ctx.fill();
 
         if (isSelected) {
-          ctx.strokeStyle = "#ffd700";
-          ctx.lineWidth   = 1.5;
           ctx.shadowColor = "#ffd700";
-          ctx.shadowBlur  = 8;
+          ctx.shadowBlur  = 10;
+          ctx.strokeStyle = "#ffd700";
+          ctx.lineWidth   = 1.8;
         } else if (isMine) {
-          ctx.strokeStyle = "rgba(255,255,255,0.5)";
-          ctx.lineWidth   = 0.8;
           ctx.shadowBlur  = 0;
+          ctx.strokeStyle = "rgba(255,255,255,0.55)";
+          ctx.lineWidth   = 0.9;
         } else {
-          ctx.strokeStyle = "rgba(0,0,0,0.6)";
-          ctx.lineWidth   = 0.4;
           ctx.shadowBlur  = 0;
+          ctx.strokeStyle = "rgba(0,0,0,0.7)";
+          ctx.lineWidth   = 0.5;
         }
         ctx.stroke();
         ctx.shadowBlur = 0;
       }
     }
 
+    // Atmosphere
+    ctx.save();
+    const atmo = ctx.createRadialGradient(cx, cy, scaleRef.current * 0.9, cx, cy, scaleRef.current * 1.15);
+    atmo.addColorStop(0,   "rgba(60,130,255,0.0)");
+    atmo.addColorStop(0.4, "rgba(60,130,255,0.18)");
+    atmo.addColorStop(1,   "rgba(60,130,255,0.0)");
+    ctx.beginPath();
+    ctx.arc(cx, cy, scaleRef.current * 1.15, 0, Math.PI * 2);
+    ctx.fillStyle = atmo;
+    ctx.fill();
+    ctx.restore();
+
     // Globe rim
     ctx.beginPath();
     path(sphere);
-    ctx.strokeStyle = "rgba(120,180,240,0.25)";
+    ctx.strokeStyle = "rgba(100,170,255,0.22)";
     ctx.lineWidth   = 1;
     ctx.stroke();
-
-    // Atmosphere glow
-    ctx.save();
-    ctx.beginPath();
-    path(sphere);
-    const atmo = ctx.createRadialGradient(cx, cy, scaleRef.current * 0.88, cx, cy, scaleRef.current * 1.12);
-    atmo.addColorStop(0,   "rgba(80,140,255,0.0)");
-    atmo.addColorStop(0.5, "rgba(80,140,255,0.15)");
-    atmo.addColorStop(1,   "rgba(80,140,255,0.0)");
-    ctx.strokeStyle = atmo;
-    ctx.lineWidth   = scaleRef.current * 0.16;
-    ctx.stroke();
-    ctx.restore();
 
     // Unit markers
     if (geo) {
@@ -196,22 +205,21 @@ export default function GameMap() {
         );
         if (!feature) continue;
         const c = path.centroid(feature as GeoPermissibleObjects);
-        if (!c || isNaN(c[0]) || isNaN(c[1])) continue;
+        if (!c || isNaN(c[0])) continue;
 
         const byNation: Record<string, number> = {};
         for (const u of pUnits) byNation[u.nation_id] = (byNation[u.nation_id] || 0) + 1;
 
         let idx = 0;
         for (const [nid, count] of Object.entries(byNation)) {
-          const nation  = nations[nid];
-          const color   = nation?.color ?? "#888";
-          const isEnemy = nid !== myNation?.id;
-          const dy      = c[1] + idx * 18;
+          const n = nations[nid];
+          const col = n?.color ?? "#888";
+          const dy  = c[1] + idx * 18;
           ctx.beginPath();
           ctx.arc(c[0], dy, 7, 0, Math.PI * 2);
-          ctx.fillStyle   = color;
+          ctx.fillStyle   = col;
           ctx.fill();
-          ctx.strokeStyle = isEnemy ? "#ff4444" : "#ffffff";
+          ctx.strokeStyle = nid !== myNation?.id ? "#ff4444" : "#fff";
           ctx.lineWidth   = 1.5;
           ctx.stroke();
           ctx.fillStyle    = "#fff";
@@ -248,22 +256,21 @@ export default function GameMap() {
       }
     }
 
-    // Coordinates
-    const rot = rotateRef.current;
-    ctx.fillStyle    = "rgba(255,255,255,0.18)";
+    // Coords
+    ctx.fillStyle    = "rgba(255,255,255,0.15)";
     ctx.font         = "10px monospace";
     ctx.textAlign    = "right";
     ctx.textBaseline = "bottom";
+    const rot = rotateRef.current;
     ctx.fillText(`${(-rot[1]).toFixed(1)}°N  ${(-rot[0]).toFixed(1)}°E`, W - 10, H - 10);
 
   }, [nations, provinces, units, myNation, selectedProvinceId, getColor]);
 
-  // ─── Hit test ───────────────────────────────────────────
+  // ── Hit test ──────────────────────────────────────────────
   const hitTest = useCallback((mx: number, my: number) => {
     const canvas = canvasRef.current;
     const geo    = geoRef.current;
     if (!canvas || !geo) return null;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
 
@@ -274,7 +281,6 @@ export default function GameMap() {
       .clipAngle(90);
 
     const p = geoPath(projection, ctx);
-
     for (const feature of geo.features) {
       ctx.beginPath();
       p(feature as GeoPermissibleObjects);
@@ -283,15 +289,14 @@ export default function GameMap() {
         const name     = String(feature.properties.name ?? tag);
         const province = Object.values(provinces).find(pr => pr.province_key === tag);
         const owner    = province?.owner_nation_id
-          ? (nations[province.owner_nation_id]?.name ?? "")
-          : "";
+          ? (nations[province.owner_nation_id]?.name ?? "") : "";
         return { name, province, owner };
       }
     }
     return null;
   }, [provinces, nations]);
 
-  // ─── Setup ──────────────────────────────────────────────
+  // ── Setup ─────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -300,20 +305,16 @@ export default function GameMap() {
     const resize = () => {
       canvas.width  = canvas.offsetWidth  || window.innerWidth;
       canvas.height = canvas.offsetHeight || window.innerHeight;
-      scaleRef.current = Math.min(canvas.width, canvas.height) * 0.38;
+      scaleRef.current = Math.min(canvas.width, canvas.height) * 0.4;
       draw();
     };
     const ro = new ResizeObserver(resize);
     ro.observe(canvas.parentElement ?? canvas);
     resize();
 
-    // Auto-spin loop
     const tick = () => {
       if (!animating) return;
-      if (spinRef.current) {
-        rotateRef.current[0] += AUTO_SPIN_SPEED;
-        draw();
-      }
+      if (spinRef.current) { rotateRef.current[0] += SPIN_SPEED; draw(); }
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
@@ -326,12 +327,10 @@ export default function GameMap() {
         moved: false,
       };
     };
-
     const onMove = (e: MouseEvent) => {
       const rect = canvas.getBoundingClientRect();
       const mx = e.clientX - rect.left;
       const my = e.clientY - rect.top;
-
       if (dragRef.current.active) {
         const dx = (e.clientX - dragRef.current.startX) * ROTATE_SPEED;
         const dy = (e.clientY - dragRef.current.startY) * ROTATE_SPEED;
@@ -345,38 +344,26 @@ export default function GameMap() {
         draw();
       } else {
         const hit = hitTest(mx, my);
-        if (hit) {
-          tooltipRef.current = { name: hit.name, owner: hit.owner, x: mx, y: my };
-          canvas.style.cursor = "pointer";
-        } else {
-          tooltipRef.current = null;
-          canvas.style.cursor = "grab";
-        }
+        tooltipRef.current = hit ? { name: hit.name, owner: hit.owner, x: mx, y: my } : null;
+        canvas.style.cursor = hit ? "pointer" : "grab";
         draw();
       }
     };
-
     const onUp = (e: MouseEvent) => {
       const { moved } = dragRef.current;
       dragRef.current.active = false;
       if (!moved) {
         const rect = canvas.getBoundingClientRect();
         const hit  = hitTest(e.clientX - rect.left, e.clientY - rect.top);
-        if (hit?.province) {
-          setSelectedProvinceId(hit.province.id);
-          setActivePanel("country");
-        } else {
-          setSelectedProvinceId(null);
-        }
+        if (hit?.province) { setSelectedProvinceId(hit.province.id); setActivePanel("country"); }
+        else setSelectedProvinceId(null);
         draw();
       }
     };
-
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       spinRef.current = false;
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scaleRef.current * factor));
+      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scaleRef.current * (e.deltaY < 0 ? 1.1 : 0.9)));
       draw();
     };
 
