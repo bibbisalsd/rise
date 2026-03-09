@@ -9,23 +9,22 @@ export default async function LobbyLayout({
   children: React.ReactNode;
 }) {
   let username = "Commander";
+  let user = null;
 
   if (process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
     try {
       const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-
-      if (!user) {
-        redirect("/login");
-      }
-
-      username = user.user_metadata?.username || user.email?.split("@")[0] || "Commander";
-    } catch (err: unknown) {
-      // Re-throw redirect errors (Next.js uses thrown errors for redirects)
-      const message = err instanceof Error ? err.message : "";
-      if (message.includes("NEXT_REDIRECT")) throw err;
-      // Swallow other auth errors — layout still renders
+      const { data } = await supabase.auth.getUser();
+      user = data.user;
+    } catch {
+      // Auth check failed — treat as not logged in
     }
+
+    if (!user) {
+      redirect("/login");
+    }
+
+    username = user.user_metadata?.username || user.email?.split("@")[0] || "Commander";
   }
 
   return (
