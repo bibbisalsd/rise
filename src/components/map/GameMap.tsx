@@ -53,6 +53,40 @@ function tagToColor(tag: string): string {
   return `hsl(${h},${s}%,${l}%)`;
 }
 
+/** Reverse all coordinate rings so d3-geo interprets them correctly.
+ *  RFC 7946 = CCW outer / CW holes  →  d3-geo = CW outer / CCW holes */
+function rewindForD3(geojson: GeoJSON): GeoJSON {
+  return {
+    ...geojson,
+    features: geojson.features.map((f) => {
+      const g = f.geometry as any;
+      if (g.type === "Polygon") {
+        return {
+          ...f,
+          geometry: {
+            ...g,
+            coordinates: g.coordinates.map((ring: number[][]) =>
+              ring.slice().reverse()
+            ),
+          },
+        };
+      }
+      if (g.type === "MultiPolygon") {
+        return {
+          ...f,
+          geometry: {
+            ...g,
+            coordinates: g.coordinates.map((poly: number[][][]) =>
+              poly.map((ring: number[][]) => ring.slice().reverse())
+            ),
+          },
+        };
+      }
+      return f;
+    }),
+  };
+}
+
 function toRgba(color: string, alpha: number): string {
   if (color.startsWith("hsl")) {
     return color.replace("hsl(", "hsla(").replace(")", `,${alpha})`);
@@ -344,7 +378,7 @@ export default function GameMap() {
 
     fetch("/maps/world.geojson")
       .then(r => { if (!r.ok) throw new Error(); return r.json(); })
-      .then((geo: GeoJSON) => { geoRef.current = geo; draw(); })
+      .then((geo: GeoJSON) => { geoRef.current = rewindForD3(geo); draw(); })
       .catch(() => draw());
 
     return () => {

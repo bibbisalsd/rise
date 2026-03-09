@@ -25,6 +25,12 @@ export function useGameSession(sessionId: string) {
       setIsLoading(true);
       setError(null);
 
+      // Skip fetches when Supabase is not configured
+      if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+        setIsLoading(false);
+        return;
+      }
+
       try {
         // 1. Load session
         const { data: session, error: sErr } = await supabase
@@ -84,6 +90,10 @@ export function useGameSession(sessionId: string) {
     loadInitialState();
 
     // ── Realtime subscriptions ──────────────────────────────
+    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+      return () => { cancelled = true; };
+    }
+
     const channel = supabase
       .channel(`game:${sessionId}`)
 
