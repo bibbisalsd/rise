@@ -1,14 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useCallback } from "react";
-import * as PIXI from "pixi.js";
 import { useGameStore } from "@/stores/gameStore";
-import { NATION_DEFINITIONS } from "@/data/nations";
 
-// ─── GeoJSON types ───────────────────────────────────────────
+// ─── GeoJSON types ──────────────────────────────────────────
 interface GeoFeature {
   type: "Feature";
-  properties: { name: string; iso_a3: string; [key: string]: unknown };
+  properties: Record<string, unknown>;
   geometry: {
     type: "Polygon" | "MultiPolygon";
     coordinates: number[][][] | number[][][][];
@@ -19,32 +17,27 @@ interface GeoJSON {
   features: GeoFeature[];
 }
 
-// ─── Map constants ───────────────────────────────────────────
-const MAP_WIDTH = 2048;
-const MAP_HEIGHT = 1024;
-const MIN_SCALE = 0.4;
-const MAX_SCALE = 8;
+// ─── Map dimensions ─────────────────────────────────────────
+const MAP_W = 2048;
+const MAP_H = 1024;
+const MIN_SCALE = 0.3;
+const MAX_SCALE = 12;
 
-// Convert lon/lat to pixel using Web Mercator
+// ─── Helpers ────────────────────────────────────────────────
 function project(lon: number, lat: number): [number, number] {
-  const x = ((lon + 180) / 360) * MAP_WIDTH;
+  const x = ((lon + 180) / 360) * MAP_W;
   const latRad = (lat * Math.PI) / 180;
   const mercN = Math.log(Math.tan(Math.PI / 4 + latRad / 2));
-  const y = MAP_HEIGHT / 2 - (mercN * MAP_HEIGHT) / (2 * Math.PI);
+  const y = MAP_H / 2 - (mercN * MAP_H) / (2 * Math.PI);
   return [x, y];
 }
 
-// Flatten GeoJSON polygon rings to flat [x,y,x,y,...] array for PixiJS
-function ringToPoints(ring: number[][]): number[] {
-  const pts: number[] = [];
-  for (const [lon, lat] of ring) {
-    const [x, y] = project(lon, lat);
-    pts.push(x, y);
-  }
-  return pts;
+function getRings(feature: GeoFeature): number[][][] {
+  return feature.geometry.type === "Polygon"
+    ? (feature.geometry.coordinates as number[][][])
+    : (feature.geometry.coordinates as number[][][][]).flat(1);
 }
 
-// Compute centroid of a polygon ring
 function centroid(ring: number[][]): [number, number] {
   let sx = 0, sy = 0;
   for (const [lon, lat] of ring) {
@@ -54,346 +47,334 @@ function centroid(ring: number[][]): [number, number] {
   return [sx / ring.length, sy / ring.length];
 }
 
+function hexToRgb(hex: string): string {
+  const h = hex.replace("#", "");
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `${r},${g},${b}`;
+}
+
+function pointInRing(
+  mx: number, my: number,
+  ring: number[][],
+  sc: number, ox: number, oy: number
+): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = project(ring[i][0], ring[i][1]);
+    const [xj, yj] = project(ring[j][0], ring[j][1]);
+    const sxi = xi * sc + ox, syi = yi * sc + oy;
+    const sxj = xj * sc + ox, syj = yj * sc + oy;
+    const intersect =
+      syi > my !== syj > my &&
+      mx < ((sxj - sxi) * (my - syi)) / (syj - syi) + sxi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// ─── Component ──────────────────────────────────────────────
 export default function GameMap() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const appRef = useRef<PIXI.Application | null>(null);
-  const provinceLayerRef = useRef<PIXI.Container | null>(null);
-  const unitLayerRef = useRef<PIXI.Container | null>(null);
-  const tooltipRef = useRef<PIXI.Container | null>(null);
-  const geoRef = useRef<GeoJSON | null>(null);
+  const canvasRef  = useRef<HTMLCanvasElement>(null);
+  const geoRef     = useRef<GeoJSON | null>(null);
+  const scaleRef   = useRef(1);
+  const offsetRef  = useRef({ x: 0, y: 0 });
+  const dragRef    = useRef({ active: false, lastX: 0, lastY: 0, moved: false });
+  const tooltipRef = useRef<{ name: string; owner: string; x: number; y: number } | null>(null);
+  const rafRef     = useRef<number>(0);
 
   const {
-    nations, provinces, units,
-    myNation, selectedProvinceId,
-    setSelectedProvinceId, setActivePanel,
+    nations, provinces, units, myNation,
+    selectedProvinceId, setSelectedProvinceId, setActivePanel,
   } = useGameStore();
 
-  // ── Build a tag→color map from live game nations + fallback to definition colors
-  const getNationColor = useCallback((tag: string | null | undefined): number => {
-    if (!tag) return 0x3a3a4a;
-    // Find nation in live game by tag
-    const live = Object.values(nations).find((n) => n.tag === tag);
-    if (live?.color) return parseInt(live.color.replace("#", ""), 16);
-    // Fall back to definition
-    const def = NATION_DEFINITIONS.find((n) => n.tag === tag);
-    if (def?.color) return parseInt(def.color.replace("#", ""), 16);
-    return 0x4a5568;
-  }, [nations]);
+  // ─── Main draw function ──────────────────────────────────
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const geo = geoRef.current;
+    if (!canvas) return;
 
-  // ── Draw all provinces ───────────────────────────────────
-  const drawProvinces = useCallback((geo: GeoJSON) => {
-    const layer = provinceLayerRef.current;
-    if (!layer) return;
-    layer.removeChildren();
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
+    const sc = scaleRef.current;
+    const ox = offsetRef.current.x;
+    const oy = offsetRef.current.y;
+
+    // Background
+    ctx.fillStyle = "#0d1b2a";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!geo) return;
+
+    // ── Provinces ────────────────────────────────────────
     for (const feature of geo.features) {
-      const tag = feature.properties.iso_a3?.toUpperCase();
-      const name = feature.properties.name as string;
+      const tag  = String(feature.properties.iso_a3 ?? "").toUpperCase();
+      const name = String(feature.properties.name ?? tag);
 
-      // Find if this country has a province in our session
-      const province = Object.values(provinces).find(
-        (p) => p.province_key === tag
-      );
+      const province      = Object.values(provinces).find(p => p.province_key === tag);
       const ownerNationId = province?.owner_nation_id ?? null;
-      const ownerNation = ownerNationId ? nations[ownerNationId] : null;
-      const isSelected = province?.id === selectedProvinceId;
-      const isMyProvince = ownerNationId === myNation?.id;
+      const ownerNation   = ownerNationId ? nations[ownerNationId] : null;
+      const isSelected    = province?.id === selectedProvinceId;
+      const isMine        = ownerNationId === myNation?.id;
 
-      // Get color
-      let fillColor = 0x2d3748; // unclaimed grey
-      if (ownerNation) fillColor = parseInt(ownerNation.color.replace("#", ""), 16);
+      let fillColor = "#2d3748";
+      if (ownerNation?.color) fillColor = ownerNation.color;
 
-      const geom = feature.geometry;
-      // Normalise both Polygon and MultiPolygon into an array of rings
-      const allRings: number[][][] =
-        geom.type === "Polygon"
-          ? (geom.coordinates as number[][][])
-          : (geom.coordinates as number[][][][]).flat(1);
-
-      // We draw each polygon ring as a separate graphics object
-      for (const rings of [allRings]) {
-        for (let ri = 0; ri < rings.length; ri++) {
-          const ring = rings[ri];
-          const pts = ringToPoints(ring);
-          if (pts.length < 6) continue;
-
-          const g = new PIXI.Graphics();
-          g.interactive = true;
-          g.cursor = "pointer";
-
-          const alpha = isSelected ? 1.0 : 0.88;
-          const borderColor = isSelected ? 0xffd700 : (isMyProvince ? 0xffffff : 0x000000);
-          const borderWidth = isSelected ? 2 : 0.5;
-
-          g.beginFill(fillColor, alpha);
-          g.lineStyle(borderWidth, borderColor, 0.6);
-          g.drawPolygon(pts);
-          g.endFill();
-
-          // Hover highlight
-          g.on("pointerover", () => {
-            if (!isSelected) {
-              g.tint = 0xccddff;
-            }
-            showTooltip(name, tag, ownerNation?.name);
-          });
-          g.on("pointerout", () => {
-            g.tint = 0xffffff;
-            hideTooltip();
-          });
-          g.on("pointertap", () => {
-            if (province) {
-              setSelectedProvinceId(province.id);
-              setActivePanel("country");
-            }
-          });
-
-          layer.addChild(g);
+      const rings = getRings(feature);
+      for (const ring of rings) {
+        if (ring.length < 3) continue;
+        ctx.beginPath();
+        for (let i = 0; i < ring.length; i++) {
+          const [px, py] = project(ring[i][0], ring[i][1]);
+          const sx = px * sc + ox;
+          const sy = py * sc + oy;
+          if (i === 0) ctx.moveTo(sx, sy); else ctx.lineTo(sx, sy);
         }
+        ctx.closePath();
+
+        const alpha = isSelected ? 1 : isMine ? 0.95 : 0.82;
+        ctx.fillStyle = `rgba(${hexToRgb(fillColor)},${alpha})`;
+        ctx.fill();
+
+        if (isSelected) {
+          ctx.strokeStyle = "#ffd700";
+          ctx.lineWidth   = 2 / sc;
+        } else if (isMine) {
+          ctx.strokeStyle = "rgba(255,255,255,0.5)";
+          ctx.lineWidth   = 0.8 / sc;
+        } else {
+          ctx.strokeStyle = "rgba(0,0,0,0.55)";
+          ctx.lineWidth   = 0.5 / sc;
+        }
+        ctx.stroke();
+      }
+
+      // Province name label (only show when zoomed in)
+      if (sc > 2.5 && rings[0]?.length > 3) {
+        const [cx, cy] = centroid(rings[0]);
+        ctx.fillStyle    = "rgba(255,255,255,0.7)";
+        ctx.font         = `${Math.min(11, 9 * sc / 3)}px sans-serif`;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(name, cx * sc + ox, cy * sc + oy);
       }
     }
-  }, [provinces, nations, myNation, selectedProvinceId, setSelectedProvinceId, setActivePanel]);
 
-  // ── Draw unit markers ────────────────────────────────────
-  const drawUnits = useCallback((geo: GeoJSON) => {
-    const layer = unitLayerRef.current;
-    if (!layer) return;
-    layer.removeChildren();
-
-    // Group units by province_id
-    const byProvince: Record<string, typeof units[string][]> = {};
+    // ── Unit markers ─────────────────────────────────────
+    const byProvince: Record<string, { nation_id: string }[]> = {};
     for (const unit of Object.values(units)) {
       if (!byProvince[unit.province_id]) byProvince[unit.province_id] = [];
       byProvince[unit.province_id].push(unit);
     }
 
-    for (const [provinceId, provinceUnits] of Object.entries(byProvince)) {
+    for (const [provinceId, pUnits] of Object.entries(byProvince)) {
       const province = provinces[provinceId];
       if (!province) continue;
-
-      // Find the GeoJSON feature for this province
       const feature = geo.features.find(
-        (f) => f.properties.iso_a3?.toUpperCase() === province.province_key
+        f => String(f.properties.iso_a3 ?? "").toUpperCase() === province.province_key
       );
       if (!feature) continue;
 
-      // Get centroid
-      const ring = feature.geometry.type === "Polygon"
-        ? (feature.geometry.coordinates as number[][][])[0]
-        : (feature.geometry.coordinates as number[][][][])[0][0];
-      const [cx, cy] = centroid(ring);
+      const rings = getRings(feature);
+      if (!rings[0]) continue;
+      const [cx, cy] = centroid(rings[0]);
+      const sx = cx * sc + ox;
+      const sy = cy * sc + oy;
 
-      // Group by nation
       const byNation: Record<string, number> = {};
-      for (const u of provinceUnits) {
-        byNation[u.nation_id] = (byNation[u.nation_id] || 0) + 1;
-      }
+      for (const u of pUnits) byNation[u.nation_id] = (byNation[u.nation_id] || 0) + 1;
 
-      let offsetY = 0;
-      for (const [nationId, count] of Object.entries(byNation)) {
-        const nation = nations[nationId];
-        const color = nation ? parseInt(nation.color.replace("#", ""), 16) : 0x888888;
-        const isEnemy = nationId !== myNation?.id;
+      let idx = 0;
+      for (const [nid, count] of Object.entries(byNation)) {
+        const nation  = nations[nid];
+        const color   = nation?.color ?? "#888";
+        const isEnemy = nid !== myNation?.id;
+        const r       = Math.max(5, 8 * Math.min(sc, 2));
+        const dy      = sy + idx * (r * 2.5);
 
-        // Draw marker circle
-        const marker = new PIXI.Graphics();
-        marker.lineStyle(1.5, isEnemy ? 0xff4444 : 0xffffff, 1);
-        marker.beginFill(color, 0.9);
-        marker.drawCircle(cx, cy + offsetY, 8);
-        marker.endFill();
+        ctx.beginPath();
+        ctx.arc(sx, dy, r, 0, Math.PI * 2);
+        ctx.fillStyle   = color;
+        ctx.fill();
+        ctx.strokeStyle = isEnemy ? "#ff4444" : "#ffffff";
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
 
-        // Unit count text
-        const style = new PIXI.TextStyle({
-          fontFamily: "monospace",
-          fontSize: 8,
-          fill: "#ffffff",
-          fontWeight: "bold",
-        });
-        const text = new PIXI.Text(String(count), style);
-        text.anchor.set(0.5);
-        text.position.set(cx, cy + offsetY);
-        layer.addChild(marker);
-        layer.addChild(text);
-
-        offsetY += 18;
+        ctx.fillStyle    = "#fff";
+        ctx.font         = `bold ${Math.max(7, r * 0.85)}px monospace`;
+        ctx.textAlign    = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(String(count), sx, dy);
+        idx++;
       }
     }
-  }, [units, provinces, nations, myNation]);
 
-  // ── Tooltip ──────────────────────────────────────────────
-  const showTooltip = (name: string, tag: string, owner?: string) => {
+    // ── Tooltip ──────────────────────────────────────────
     const tt = tooltipRef.current;
-    if (!tt) return;
-    tt.removeChildren();
+    if (tt) {
+      const pad = 8, w = 170, h = tt.owner ? 46 : 28;
+      const tx = Math.min(tt.x + 14, canvas.width - w - 4);
+      const ty = Math.min(tt.y + 14, canvas.height - h - 4);
 
-    const bg = new PIXI.Graphics();
-    bg.beginFill(0x111827, 0.9);
-    bg.lineStyle(1, 0x4b5563);
-    bg.drawRoundedRect(0, 0, 160, owner ? 44 : 28, 4);
-    bg.endFill();
-    tt.addChild(bg);
+      ctx.fillStyle   = "rgba(10,15,26,0.93)";
+      ctx.strokeStyle = "rgba(255,255,255,0.13)";
+      ctx.lineWidth   = 1;
+      ctx.beginPath();
+      ctx.roundRect(tx, ty, w, h, 5);
+      ctx.fill();
+      ctx.stroke();
 
-    const style = new PIXI.TextStyle({ fontFamily: "monospace", fontSize: 11, fill: "#f9fafb" });
-    const t1 = new PIXI.Text(`${name} (${tag})`, style);
-    t1.position.set(8, 6);
-    tt.addChild(t1);
+      ctx.fillStyle    = "#f9fafb";
+      ctx.font         = "11px monospace";
+      ctx.textAlign    = "left";
+      ctx.textBaseline = "top";
+      ctx.fillText(tt.name, tx + pad, ty + 7);
 
-    if (owner) {
-      const style2 = new PIXI.TextStyle({ fontFamily: "monospace", fontSize: 10, fill: "#9ca3af" });
-      const t2 = new PIXI.Text(`Owner: ${owner}`, style2);
-      t2.position.set(8, 24);
-      tt.addChild(t2);
-    }
-
-    tt.visible = true;
-  };
-
-  const hideTooltip = () => {
-    if (tooltipRef.current) tooltipRef.current.visible = false;
-  };
-
-  // ── Init PixiJS ──────────────────────────────────────────
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const app = new PIXI.Application({
-      width: containerRef.current.clientWidth,
-      height: containerRef.current.clientHeight,
-      backgroundColor: 0x0d1b2a,
-      antialias: true,
-      resolution: window.devicePixelRatio || 1,
-      autoDensity: true,
-    });
-
-    containerRef.current.appendChild(app.view as HTMLCanvasElement);
-    appRef.current = app;
-
-    // ── World container (pan/zoom target) ─────────────────
-    const world = new PIXI.Container();
-    app.stage.addChild(world);
-
-    const provinceLayer = new PIXI.Container();
-    const unitLayer = new PIXI.Container();
-    const tt = new PIXI.Container();
-    tt.visible = false;
-    tt.zIndex = 100;
-
-    world.addChild(provinceLayer);
-    world.addChild(unitLayer);
-    app.stage.addChild(tt); // tooltip in screen space
-
-    provinceLayerRef.current = provinceLayer;
-    unitLayerRef.current = unitLayer;
-    tooltipRef.current = tt;
-
-    // Initial scale to fit
-    const scaleX = app.screen.width / MAP_WIDTH;
-    const scaleY = app.screen.height / MAP_HEIGHT;
-    const initScale = Math.min(scaleX, scaleY) * 0.95;
-    world.scale.set(initScale);
-    world.position.set(
-      (app.screen.width - MAP_WIDTH * initScale) / 2,
-      (app.screen.height - MAP_HEIGHT * initScale) / 2
-    );
-
-    // ── Pan & zoom ────────────────────────────────────────
-    let dragging = false;
-    let lastX = 0, lastY = 0;
-
-    app.stage.interactive = true;
-    app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height);
-
-    app.stage.on("pointerdown", (e: PIXI.FederatedPointerEvent) => {
-      dragging = true;
-      lastX = e.clientX;
-      lastY = e.clientY;
-    });
-    app.stage.on("pointermove", (e: PIXI.FederatedPointerEvent) => {
-      if (!dragging) {
-        // Move tooltip to cursor
-        if (tt.visible) {
-          tt.position.set(e.clientX + 12, e.clientY + 12);
-        }
-        return;
+      if (tt.owner) {
+        ctx.fillStyle = "#9ca3af";
+        ctx.font      = "10px monospace";
+        ctx.fillText(`Owner: ${tt.owner}`, tx + pad, ty + 26);
       }
-      world.x += e.clientX - lastX;
-      world.y += e.clientY - lastY;
-      lastX = e.clientX;
-      lastY = e.clientY;
-    });
-    app.stage.on("pointerup", () => { dragging = false; });
-    app.stage.on("pointerupoutside", () => { dragging = false; });
+    }
+  }, [nations, provinces, units, myNation, selectedProvinceId]);
 
-    // Scroll to zoom
+  // ─── Hit test ───────────────────────────────────────────
+  const hitTest = useCallback((mx: number, my: number) => {
+    const geo = geoRef.current;
+    if (!geo) return null;
+    const sc = scaleRef.current;
+    const ox = offsetRef.current.x;
+    const oy = offsetRef.current.y;
+
+    for (const feature of geo.features) {
+      for (const ring of getRings(feature)) {
+        if (pointInRing(mx, my, ring, sc, ox, oy)) {
+          const tag      = String(feature.properties.iso_a3 ?? "").toUpperCase();
+          const name     = String(feature.properties.name ?? tag);
+          const province = Object.values(provinces).find(p => p.province_key === tag);
+          const owner    = province?.owner_nation_id
+            ? (nations[province.owner_nation_id]?.name ?? "")
+            : "";
+          return { name, province, owner };
+        }
+      }
+    }
+    return null;
+  }, [provinces, nations]);
+
+  // ─── Setup canvas + events ───────────────────────────────
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const resize = () => {
+      const wasBlank = canvas.width === 0;
+      canvas.width  = canvas.offsetWidth  || window.innerWidth;
+      canvas.height = canvas.offsetHeight || window.innerHeight;
+      if (wasBlank) {
+        const sc = Math.min(canvas.width / MAP_W, canvas.height / MAP_H) * 0.95;
+        scaleRef.current  = sc;
+        offsetRef.current = {
+          x: (canvas.width  - MAP_W * sc) / 2,
+          y: (canvas.height - MAP_H * sc) / 2,
+        };
+      }
+      draw();
+    };
+
+    const ro = new ResizeObserver(resize);
+    ro.observe(canvas.parentElement ?? canvas);
+    resize();
+
+    const onDown = (e: MouseEvent) => {
+      dragRef.current = { active: true, lastX: e.clientX, lastY: e.clientY, moved: false };
+    };
+    const onMove = (e: MouseEvent) => {
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+
+      if (dragRef.current.active) {
+        const dx = e.clientX - dragRef.current.lastX;
+        const dy = e.clientY - dragRef.current.lastY;
+        if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragRef.current.moved = true;
+        offsetRef.current.x += dx;
+        offsetRef.current.y += dy;
+        dragRef.current.lastX = e.clientX;
+        dragRef.current.lastY = e.clientY;
+        tooltipRef.current = null;
+      } else {
+        const hit = hitTest(mx, my);
+        if (hit) {
+          tooltipRef.current = { name: hit.name, owner: hit.owner, x: mx, y: my };
+          canvas.style.cursor = "pointer";
+        } else {
+          tooltipRef.current = null;
+          canvas.style.cursor = "grab";
+        }
+      }
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(draw);
+    };
+    const onUp = (e: MouseEvent) => {
+      const { moved } = dragRef.current;
+      dragRef.current.active = false;
+      if (!moved) {
+        const rect = canvas.getBoundingClientRect();
+        const hit  = hitTest(e.clientX - rect.left, e.clientY - rect.top);
+        if (hit?.province) {
+          setSelectedProvinceId(hit.province.id);
+          setActivePanel("country");
+        } else {
+          setSelectedProvinceId(null);
+        }
+      }
+    };
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 0.9;
-      const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, world.scale.x * factor));
-      const mouseX = e.offsetX;
-      const mouseY = e.offsetY;
-      world.x = mouseX - (mouseX - world.x) * (newScale / world.scale.x);
-      world.y = mouseY - (mouseY - world.y) * (newScale / world.scale.y);
-      world.scale.set(newScale);
+      const rect   = canvas.getBoundingClientRect();
+      const mx     = e.clientX - rect.left;
+      const my     = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 0.9;
+      const newSc  = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scaleRef.current * factor));
+      offsetRef.current.x = mx - (mx - offsetRef.current.x) * (newSc / scaleRef.current);
+      offsetRef.current.y = my - (my - offsetRef.current.y) * (newSc / scaleRef.current);
+      scaleRef.current    = newSc;
+      cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(draw);
     };
-    (app.view as HTMLCanvasElement).addEventListener("wheel", onWheel, { passive: false });
+    const onLeave = () => { tooltipRef.current = null; draw(); };
 
-    // ── Load GeoJSON & draw ───────────────────────────────
+    canvas.addEventListener("mousedown",  onDown);
+    canvas.addEventListener("mousemove",  onMove);
+    canvas.addEventListener("mouseup",    onUp);
+    canvas.addEventListener("wheel",      onWheel, { passive: false });
+    canvas.addEventListener("mouseleave", onLeave);
+
+    // Load map data
     fetch("/maps/world.geojson")
-      .then((r) => {
-        if (!r.ok) throw new Error("Map data not found");
-        return r.json();
-      })
-      .then((geo: GeoJSON) => {
-        geoRef.current = geo;
-        drawProvinces(geo);
-        drawUnits(geo);
-      })
-      .catch(() => {
-        // Draw placeholder if GeoJSON not found
-        const txt = new PIXI.Text(
-          "Map data not found.\nPlace world.geojson in /public/maps/",
-          new PIXI.TextStyle({ fill: "#9ca3af", fontSize: 18, align: "center" })
-        );
-        txt.anchor.set(0.5);
-        txt.position.set(MAP_WIDTH / 2, MAP_HEIGHT / 2);
-        provinceLayer.addChild(txt);
-      });
-
-    // ── Resize handler ────────────────────────────────────
-    const onResize = () => {
-      if (!containerRef.current) return;
-      app.renderer.resize(
-        containerRef.current.clientWidth,
-        containerRef.current.clientHeight
-      );
-      app.stage.hitArea = new PIXI.Rectangle(0, 0, app.screen.width, app.screen.height);
-    };
-    window.addEventListener("resize", onResize);
+      .then(r => { if (!r.ok) throw new Error(); return r.json(); })
+      .then((geo: GeoJSON) => { geoRef.current = geo; draw(); })
+      .catch(() => draw());
 
     return () => {
-      window.removeEventListener("resize", onResize);
-      (app.view as HTMLCanvasElement).removeEventListener("wheel", onWheel);
-      app.destroy(true, { children: true });
-      appRef.current = null;
+      ro.disconnect();
+      canvas.removeEventListener("mousedown",  onDown);
+      canvas.removeEventListener("mousemove",  onMove);
+      canvas.removeEventListener("mouseup",    onUp);
+      canvas.removeEventListener("wheel",      onWheel);
+      canvas.removeEventListener("mouseleave", onLeave);
+      cancelAnimationFrame(rafRef.current);
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [draw, hitTest, setSelectedProvinceId, setActivePanel]);
 
-  // ── Redraw when game state changes ────────────────────────
+  // Redraw on state changes
   useEffect(() => {
-    if (!geoRef.current) return;
-    drawProvinces(geoRef.current);
-  }, [provinces, nations, selectedProvinceId, drawProvinces]);
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(draw);
+  }, [draw]);
 
-  useEffect(() => {
-    if (!geoRef.current) return;
-    drawUnits(geoRef.current);
-  }, [units, drawUnits]);
-
-  return (
-    <div
-      ref={containerRef}
-      className="w-full h-full"
-      style={{ cursor: "grab" }}
-    />
-  );
+  return <canvas ref={canvasRef} className="w-full h-full block" />;
 }
