@@ -24,15 +24,37 @@ const MAX_SCALE    = 2000;
 const ROTATE_SPEED = 0.4;
 const SPIN_SPEED   = 0.025;
 
-// ── Generate a stable muted color from a string (for unclaimed nations) ──
+// ── Extract tag from feature (handles all Natural Earth naming variants) ──
+function getTag(p: Record<string, unknown>): string {
+  return String(
+    p.iso_a3 ?? p.ISO_A3 ?? p.ADM0_A3 ?? p.adm0_a3 ?? ""
+  ).toUpperCase();
+}
+
+function getName(p: Record<string, unknown>, tag: string): string {
+  return String(p.name ?? p.NAME ?? p.ADMIN ?? p.admin ?? tag);
+}
+
+// ── Stable unique muted color per country tag ──────────────────
 function tagToColor(tag: string): string {
+  if (!tag) return "#4a3a3a";
   let hash = 0;
   for (let i = 0; i < tag.length; i++) hash = tag.charCodeAt(i) + ((hash << 5) - hash);
-  // Hue across full spectrum, low-mid saturation, mid lightness
   const h = ((hash >>> 0) % 360);
-  const s = 28 + ((hash >> 4) & 0xf);   // 28–44%
-  const l = 28 + ((hash >> 8) & 0xf);   // 28–44%
+  const s = 30 + ((hash >> 4) & 0xf);  // 30–46%
+  const l = 25 + ((hash >> 8) & 0xf);  // 25–41%
   return `hsl(${h},${s}%,${l}%)`;
+}
+
+function toRgba(color: string, alpha: number): string {
+  if (color.startsWith("hsl")) {
+    return color.replace("hsl(", "hsla(").replace(")", `,${alpha})`);
+  }
+  const c = color.replace("#", "");
+  const r = parseInt(c.slice(0, 2), 16);
+  const g = parseInt(c.slice(2, 4), 16);
+  const b = parseInt(c.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 export default function GameMap() {
@@ -54,30 +76,13 @@ export default function GameMap() {
     selectedProvinceId, setSelectedProvinceId, setActivePanel,
   } = useGameStore();
 
-  // ── Color lookup ───────────────────────────────────────────
-  const getColor = useCallback((tag: string): { color: string; owned: boolean } => {
+  const getColor = useCallback((tag: string): string => {
     const province      = Object.values(provinces).find(p => p.province_key === tag);
     const ownerNationId = province?.owner_nation_id ?? null;
     const ownerNation   = ownerNationId ? nations[ownerNationId] : null;
-    if (ownerNation?.color) return { color: ownerNation.color, owned: true };
-    return { color: tagToColor(tag), owned: false };
+    return ownerNation?.color ?? tagToColor(tag);
   }, [provinces, nations]);
 
-  // ── Parse hex or hsl to rgba string ───────────────────────
-  function toRgba(color: string, alpha: number): string {
-    // If hsl, just use it directly with opacity
-    if (color.startsWith("hsl")) {
-      return color.replace("hsl(", `hsla(`).replace(")", `,${alpha})`);
-    }
-    // Hex
-    const c = color.replace("#", "");
-    const r = parseInt(c.slice(0, 2), 16);
-    const g = parseInt(c.slice(2, 4), 16);
-    const b = parseInt(c.slice(4, 6), 16);
-    return `rgba(${r},${g},${b},${alpha})`;
-  }
-
-  // ── Draw ──────────────────────────────────────────────────
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
     const geo    = geoRef.current;
@@ -110,10 +115,9 @@ export default function GameMap() {
     for (let i = 0; i < 220; i++) {
       const sx = (i * 7919 + 11) % W;
       const sy = (i * 6271 + 17) % H;
-      const br = 0.3 + (i % 5) * 0.15;
-      ctx.fillStyle = `rgba(255,255,255,${br})`;
+      ctx.fillStyle = `rgba(255,255,255,${0.2 + (i % 5) * 0.12})`;
       ctx.beginPath();
-      ctx.arc(sx, sy, i % 4 === 0 ? 1.1 : 0.55, 0, Math.PI * 2);
+      ctx.arc(sx, sy, i % 4 === 0 ? 1.1 : 0.5, 0, Math.PI * 2);
       ctx.fill();
     }
 
@@ -140,11 +144,11 @@ export default function GameMap() {
     // Countries
     if (geo) {
       for (const feature of geo.features) {
-        const tag        = String(feature.properties.iso_a3 ?? "").toUpperCase();
+        const tag        = getTag(feature.properties);
         const province   = Object.values(provinces).find(p => p.province_key === tag);
         const isSelected = province?.id === selectedProvinceId;
         const isMine     = province?.owner_nation_id === myNation?.id;
-        const { color }  = getColor(tag);
+        const color      = getColor(tag);
 
         ctx.beginPath();
         path(feature as GeoPermissibleObjects);
@@ -152,18 +156,17 @@ export default function GameMap() {
         ctx.fillStyle = toRgba(color, isSelected ? 1.0 : isMine ? 0.95 : 0.88);
         ctx.fill();
 
+        ctx.shadowBlur = 0;
         if (isSelected) {
           ctx.shadowColor = "#ffd700";
           ctx.shadowBlur  = 10;
           ctx.strokeStyle = "#ffd700";
           ctx.lineWidth   = 1.8;
         } else if (isMine) {
-          ctx.shadowBlur  = 0;
           ctx.strokeStyle = "rgba(255,255,255,0.55)";
           ctx.lineWidth   = 0.9;
         } else {
-          ctx.shadowBlur  = 0;
-          ctx.strokeStyle = "rgba(0,0,0,0.7)";
+          ctx.strokeStyle = "rgba(0,0,0,0.65)";
           ctx.lineWidth   = 0.5;
         }
         ctx.stroke();
@@ -201,7 +204,7 @@ export default function GameMap() {
         const province = provinces[provinceId];
         if (!province) continue;
         const feature = geo.features.find(
-          f => String(f.properties.iso_a3 ?? "").toUpperCase() === province.province_key
+          f => getTag(f.properties) === province.province_key
         );
         if (!feature) continue;
         const c = path.centroid(feature as GeoPermissibleObjects);
@@ -212,7 +215,7 @@ export default function GameMap() {
 
         let idx = 0;
         for (const [nid, count] of Object.entries(byNation)) {
-          const n = nations[nid];
+          const n   = nations[nid];
           const col = n?.color ?? "#888";
           const dy  = c[1] + idx * 18;
           ctx.beginPath();
@@ -257,11 +260,11 @@ export default function GameMap() {
     }
 
     // Coords
+    const rot = rotateRef.current;
     ctx.fillStyle    = "rgba(255,255,255,0.15)";
     ctx.font         = "10px monospace";
     ctx.textAlign    = "right";
     ctx.textBaseline = "bottom";
-    const rot = rotateRef.current;
     ctx.fillText(`${(-rot[1]).toFixed(1)}°N  ${(-rot[0]).toFixed(1)}°E`, W - 10, H - 10);
 
   }, [nations, provinces, units, myNation, selectedProvinceId, getColor]);
@@ -285,8 +288,8 @@ export default function GameMap() {
       ctx.beginPath();
       p(feature as GeoPermissibleObjects);
       if (ctx.isPointInPath(mx, my)) {
-        const tag      = String(feature.properties.iso_a3 ?? "").toUpperCase();
-        const name     = String(feature.properties.name ?? tag);
+        const tag      = getTag(feature.properties);
+        const name     = getName(feature.properties, tag);
         const province = Object.values(provinces).find(pr => pr.province_key === tag);
         const owner    = province?.owner_nation_id
           ? (nations[province.owner_nation_id]?.name ?? "") : "";
@@ -296,7 +299,7 @@ export default function GameMap() {
     return null;
   }, [provinces, nations]);
 
-  // ── Setup ─────────────────────────────────────────────────
+  // ── Canvas setup ──────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -363,7 +366,8 @@ export default function GameMap() {
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       spinRef.current = false;
-      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scaleRef.current * (e.deltaY < 0 ? 1.1 : 0.9)));
+      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE,
+        scaleRef.current * (e.deltaY < 0 ? 1.1 : 0.9)));
       draw();
     };
 
