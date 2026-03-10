@@ -213,11 +213,11 @@ export default function GameMap() {
         ctx.shadowBlur = 0;
         if (isSelected) {
           ctx.shadowColor = "#ffd700"; ctx.shadowBlur = 10;
-          ctx.strokeStyle = "#ffd700"; ctx.lineWidth = 1.8;
+          ctx.strokeStyle = "#ffd700"; ctx.lineWidth = 2;
         } else if (isMine) {
-          ctx.strokeStyle = "rgba(255,255,255,0.5)"; ctx.lineWidth = scale > 400 ? 0.8 : 0.5;
+          ctx.strokeStyle = "rgba(255,255,255,0.6)"; ctx.lineWidth = scale > 400 ? 1.0 : 0.6;
         } else {
-          ctx.strokeStyle = "rgba(0,0,0,0.5)"; ctx.lineWidth = scale > 400 ? 0.5 : 0.3;
+          ctx.strokeStyle = "rgba(0,0,0,0.4)"; ctx.lineWidth = scale > 400 ? 0.7 : 0.4;
         }
         ctx.stroke();
         ctx.shadowBlur = 0;
@@ -447,7 +447,7 @@ export default function GameMap() {
       fetch("/data/biomes.json").then(r => r.ok ? r.json() : {}),
       fetch("/data/resource_deposits.json").then(r => r.ok ? r.json() : {}),
     ]).then(([geo, biomes, resources]) => {
-      if (geo) geoRef.current = geo;
+      if (geo) geoRef.current = rewindForD3(geo);
       if (biomes) biomesRef.current = biomes;
       if (resources) resourcesRef.current = resources;
       draw();
