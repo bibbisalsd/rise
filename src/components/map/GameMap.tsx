@@ -148,7 +148,7 @@ export default function GameMap() {
             : toRgba(BIOME_COLORS[biome] ?? BIOME_COLORS.plains, isSelected ? 0.9 : 0.75);
 
           ctx.beginPath(); path(feature as GeoPermissibleObjects);
-          ctx.fillStyle = fillColor; ctx.fill();
+          ctx.fillStyle = fillColor; ctx.fill("evenodd");
 
           ctx.shadowBlur = 0;
           if (isSelected) {
