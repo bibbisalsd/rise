@@ -447,7 +447,7 @@ export default function GameMap() {
       fetch("/data/biomes.json").then(r => r.ok ? r.json() : {}),
       fetch("/data/resource_deposits.json").then(r => r.ok ? r.json() : {}),
     ]).then(([geo, biomes, resources]) => {
-      if (geo) geoRef.current = rewindForD3(geo);
+      if (geo) geoRef.current = geo;
       if (biomes) biomesRef.current = biomes;
       if (resources) resourcesRef.current = resources;
       draw();
