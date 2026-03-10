@@ -63,7 +63,22 @@ function getAdm1Code(p: Record<string, unknown>): string {
   return String(p.adm1_code ?? p.ADM1_CODE ?? "").trim() || "UNK";
 }
 
-// No rewind needed — world-adm1.geojson winding is already correct for d3-geo
+/** Rewind rings so d3-geo renders fills correctly with evenodd rule */
+function rewindForD3(geojson: GeoJSON): GeoJSON {
+  return {
+    ...geojson,
+    features: geojson.features.map((f) => {
+      const g = f.geometry as any;
+      if (g.type === "Polygon") {
+        return { ...f, geometry: { ...g, coordinates: g.coordinates.map((r: number[][]) => [...r].reverse()) } };
+      }
+      if (g.type === "MultiPolygon") {
+        return { ...f, geometry: { ...g, coordinates: g.coordinates.map((poly: number[][][]) => poly.map((r: number[][]) => [...r].reverse())) } };
+      }
+      return f;
+    }),
+  };
+}
 function getName(p: Record<string, unknown>): string {
   return String(p.name ?? p.NAME ?? p.admin ?? "Unknown");
 }
@@ -133,8 +148,11 @@ export default function GameMap() {
       ctx.beginPath(); path(graticule);
       ctx.strokeStyle = "rgba(150,190,230,0.06)"; ctx.lineWidth = 0.4; ctx.stroke();
 
-      // Tiles
+      // Tiles — clip to sphere so provinces render correctly inside globe
       if (geo) {
+        ctx.save();
+        ctx.beginPath(); path(sphere); ctx.clip();
+
         for (const feature of geo.features) {
           const code       = getAdm1Code(feature.properties);
           const biome      = biomesRef.current[code] ?? "plains";
@@ -148,7 +166,7 @@ export default function GameMap() {
             : toRgba(BIOME_COLORS[biome] ?? BIOME_COLORS.plains, isSelected ? 0.9 : 0.75);
 
           ctx.beginPath(); path(feature as GeoPermissibleObjects);
-          ctx.fillStyle = fillColor; ctx.fill("evenodd");
+          ctx.fillStyle = fillColor; ctx.fill();
 
           ctx.shadowBlur = 0;
           if (isSelected) {
@@ -183,6 +201,8 @@ export default function GameMap() {
             ctx.fillText(RESOURCE_ICONS[deps[0][0]] ?? "?", c[0], c[1]);
           }
         }
+
+        ctx.restore(); // end sphere clip
       }
 
       // Atmosphere
@@ -228,7 +248,7 @@ export default function GameMap() {
       // Tooltip
       const tt = tooltipRef.current;
       if (tt) {
-        const lines = [tt.name, tt.owner ? `Owner: ${tt.owner}` : null, tt.resources.length ? `Resources: ${tt.resources.join(", ")}` : null].filter(Boolean) as string[];
+        const lines = [tt.owner || tt.name, tt.owner ? tt.name : null, tt.resources.length ? `Resources: ${tt.resources.join(", ")}` : null].filter(Boolean) as string[];
         const pad = 8, w = 200, lineH = 16, h = pad*2 + lines.length*lineH;
         const tx = Math.min(tt.x+14, W-w-4), ty = Math.min(tt.y+14, H-h-4);
         ctx.fillStyle = "rgba(6,10,22,0.94)"; ctx.strokeStyle = "rgba(255,255,255,0.13)"; ctx.lineWidth = 1;
@@ -357,7 +377,7 @@ export default function GameMap() {
       fetch("/data/biomes.json").then(r => r.ok ? r.json() : {}),
       fetch("/data/resource_deposits.json").then(r => r.ok ? r.json() : {}),
     ]).then(([geo, biomes, resources]) => {
-      if (geo)       geoRef.current       = geo;
+      if (geo)       geoRef.current       = rewindForD3(geo);
       if (biomes)    biomesRef.current    = biomes;
       if (resources) resourcesRef.current = resources;
       draw();
