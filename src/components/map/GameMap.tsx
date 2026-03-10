@@ -63,6 +63,33 @@ function getAdm1Code(p: Record<string, unknown>): string {
   return String(p.adm1_code ?? p.ADM1_CODE ?? "").trim() || "UNK";
 }
 
+/** Fix GeoJSON winding for canvas: exterior rings must be CCW for nonzero fill rule */
+function fixWinding(geojson: GeoJSON): GeoJSON {
+  return {
+    ...geojson,
+    features: geojson.features.map((f) => {
+      const g = f.geometry as any;
+      const fixPoly = (rings: number[][][]) =>
+        rings.map((ring, i) => {
+          // Calculate signed area
+          let area = 0;
+          for (let j = 0; j < ring.length - 1; j++) {
+            area += ring[j][0] * ring[j+1][1] - ring[j+1][0] * ring[j][1];
+          }
+          const isCCW = area > 0;
+          // Exterior ring (i===0) must be CCW; holes (i>0) must be CW
+          const shouldBeCCW = i === 0;
+          return (isCCW !== shouldBeCCW) ? [...ring].reverse() : ring;
+        });
+      if (g.type === "Polygon")
+        return { ...f, geometry: { ...g, coordinates: fixPoly(g.coordinates) } };
+      if (g.type === "MultiPolygon")
+        return { ...f, geometry: { ...g, coordinates: g.coordinates.map(fixPoly) } };
+      return f;
+    }),
+  };
+}
+
 function getName(p: Record<string, unknown>): string {
   return String(p.name ?? p.NAME ?? p.admin ?? "Unknown");
 }
@@ -155,7 +182,7 @@ export default function GameMap() {
           ctx.beginPath();
           path(feature as GeoPermissibleObjects);
           ctx.fillStyle = fillColor;
-          ctx.fill("evenodd");
+          ctx.fill();
 
           ctx.shadowBlur = 0;
           if (isSelected) {
@@ -368,7 +395,7 @@ export default function GameMap() {
       fetch(`/data/biomes.json${bust}`, { cache: "no-store" }).then(r => r.json()),
       fetch(`/data/resource_deposits.json${bust}`, { cache: "no-store" }).then(r => r.json()),
     ]).then(([geo, biomes, resources]) => {
-      geoRef.current       = geo;
+      geoRef.current       = fixWinding(geo);
       biomesRef.current    = biomes;
       resourcesRef.current = resources;
       draw();
