@@ -63,22 +63,6 @@ function getAdm1Code(p: Record<string, unknown>): string {
   return String(p.adm1_code ?? p.ADM1_CODE ?? "").trim() || "UNK";
 }
 
-/** Rewind rings so d3-geo renders fills correctly with evenodd rule */
-function rewindForD3(geojson: GeoJSON): GeoJSON {
-  return {
-    ...geojson,
-    features: geojson.features.map((f) => {
-      const g = f.geometry as any;
-      if (g.type === "Polygon") {
-        return { ...f, geometry: { ...g, coordinates: g.coordinates.map((r: number[][]) => [...r].reverse()) } };
-      }
-      if (g.type === "MultiPolygon") {
-        return { ...f, geometry: { ...g, coordinates: g.coordinates.map((poly: number[][][]) => poly.map((r: number[][]) => [...r].reverse())) } };
-      }
-      return f;
-    }),
-  };
-}
 function getName(p: Record<string, unknown>): string {
   return String(p.name ?? p.NAME ?? p.admin ?? "Unknown");
 }
@@ -377,7 +361,7 @@ export default function GameMap() {
       fetch("/data/biomes.json").then(r => r.ok ? r.json() : {}),
       fetch("/data/resource_deposits.json").then(r => r.ok ? r.json() : {}),
     ]).then(([geo, biomes, resources]) => {
-      if (geo)       geoRef.current       = rewindForD3(geo);
+      if (geo)       geoRef.current       = geo;
       if (biomes)    biomesRef.current    = biomes;
       if (resources) resourcesRef.current = resources;
       draw();
