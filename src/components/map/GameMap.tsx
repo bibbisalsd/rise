@@ -112,7 +112,7 @@ export default function GameMap() {
 
       ctx.clearRect(0, 0, W, H);
 
-      // Space
+      // ── Space background ──────────────────────────────────────────────
       ctx.fillStyle = "#03060f";
       ctx.fillRect(0, 0, W, H);
       for (let i = 0; i < 220; i++) {
@@ -122,21 +122,24 @@ export default function GameMap() {
         ctx.fill();
       }
 
-      // Ocean — draw as simple circle, not path(sphere), to avoid winding issues
-      ctx.beginPath(); ctx.arc(cx, cy, scale, 0, Math.PI*2);
+      // ── Globe clip: everything below is clipped to the sphere circle ──
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cx, cy, scale, 0, Math.PI * 2);
+      ctx.clip();
+
+      // Ocean fill
       const ocean = ctx.createRadialGradient(cx-scale*0.2, cy-scale*0.25, 0, cx, cy, scale);
       ocean.addColorStop(0, "#1e5fa0"); ocean.addColorStop(0.5, "#0e3d70"); ocean.addColorStop(1, "#071e3d");
-      ctx.fillStyle = ocean; ctx.fill();
+      ctx.fillStyle = ocean;
+      ctx.fillRect(cx - scale, cy - scale, scale * 2, scale * 2);
 
       // Graticule
       ctx.beginPath(); path(graticule);
       ctx.strokeStyle = "rgba(150,190,230,0.06)"; ctx.lineWidth = 0.4; ctx.stroke();
 
-      // Tiles — clip to sphere so provinces render correctly inside globe
+      // ── Province tiles ────────────────────────────────────────────────
       if (geo) {
-        ctx.save();
-        ctx.beginPath(); ctx.arc(cx, cy, scale, 0, Math.PI*2); ctx.clip();
-
         for (const feature of geo.features) {
           const code       = getAdm1Code(feature.properties);
           const biome      = biomesRef.current[code] ?? "plains";
@@ -149,8 +152,10 @@ export default function GameMap() {
             ? toRgba(owner.color, isSelected ? 1.0 : isMine ? 0.95 : 0.88)
             : toRgba(BIOME_COLORS[biome] ?? BIOME_COLORS.plains, isSelected ? 0.9 : 0.75);
 
-          ctx.beginPath(); path(feature as GeoPermissibleObjects);
-          ctx.fillStyle = fillColor; ctx.fill("evenodd");
+          ctx.beginPath();
+          path(feature as GeoPermissibleObjects);
+          ctx.fillStyle = fillColor;
+          ctx.fill("evenodd");
 
           ctx.shadowBlur = 0;
           if (isSelected) {
@@ -185,11 +190,12 @@ export default function GameMap() {
             ctx.fillText(RESOURCE_ICONS[deps[0][0]] ?? "?", c[0], c[1]);
           }
         }
-
-        ctx.restore(); // end sphere clip
       }
 
-      // Atmosphere
+      // ── End globe clip ────────────────────────────────────────────────
+      ctx.restore();
+
+      // Atmosphere glow
       ctx.save();
       const atmo = ctx.createRadialGradient(cx, cy, scale*0.9, cx, cy, scale*1.15);
       atmo.addColorStop(0, "rgba(60,130,255,0.0)"); atmo.addColorStop(0.4, "rgba(60,130,255,0.18)"); atmo.addColorStop(1, "rgba(60,130,255,0.0)");
@@ -356,16 +362,17 @@ export default function GameMap() {
     canvas.addEventListener("dblclick",   () => { spinRef.current = true; });
 
     // Load data
+    const bust = `?v=${Date.now()}`;
     Promise.all([
-      fetch("/maps/world-adm1.geojson").then(r => r.ok ? r.json() : null),
-      fetch("/data/biomes.json").then(r => r.ok ? r.json() : {}),
-      fetch("/data/resource_deposits.json").then(r => r.ok ? r.json() : {}),
+      fetch(`/maps/world-adm1.geojson${bust}`, { cache: "no-store" }).then(r => r.json()),
+      fetch(`/data/biomes.json${bust}`, { cache: "no-store" }).then(r => r.json()),
+      fetch(`/data/resource_deposits.json${bust}`, { cache: "no-store" }).then(r => r.json()),
     ]).then(([geo, biomes, resources]) => {
-      if (geo)       geoRef.current       = geo;
-      if (biomes)    biomesRef.current    = biomes;
-      if (resources) resourcesRef.current = resources;
+      geoRef.current       = geo;
+      biomesRef.current    = biomes;
+      resourcesRef.current = resources;
       draw();
-    }).catch(() => draw());
+    }).catch((e) => { console.error("Map data load failed:", e); draw(); });
 
     // Redraw on game state changes (e.g. nation captures a province)
     const unsubStore = useGameStore.subscribe(() => { if (!spinRef.current) draw(); });
