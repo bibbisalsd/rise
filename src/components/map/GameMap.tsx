@@ -122,8 +122,8 @@ export default function GameMap() {
         ctx.fill();
       }
 
-      // Ocean
-      ctx.beginPath(); path(sphere);
+      // Ocean — draw as simple circle, not path(sphere), to avoid winding issues
+      ctx.beginPath(); ctx.arc(cx, cy, scale, 0, Math.PI*2);
       const ocean = ctx.createRadialGradient(cx-scale*0.2, cy-scale*0.25, 0, cx, cy, scale);
       ocean.addColorStop(0, "#1e5fa0"); ocean.addColorStop(0.5, "#0e3d70"); ocean.addColorStop(1, "#071e3d");
       ctx.fillStyle = ocean; ctx.fill();
@@ -135,7 +135,7 @@ export default function GameMap() {
       // Tiles — clip to sphere so provinces render correctly inside globe
       if (geo) {
         ctx.save();
-        ctx.beginPath(); path(sphere); ctx.clip();
+        ctx.beginPath(); ctx.arc(cx, cy, scale, 0, Math.PI*2); ctx.clip();
 
         for (const feature of geo.features) {
           const code       = getAdm1Code(feature.properties);
@@ -197,7 +197,7 @@ export default function GameMap() {
       ctx.restore();
 
       // Rim
-      ctx.beginPath(); path(sphere); ctx.strokeStyle = "rgba(100,170,255,0.22)"; ctx.lineWidth = 1; ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, scale, 0, Math.PI*2); ctx.strokeStyle = "rgba(100,170,255,0.22)"; ctx.lineWidth = 1; ctx.stroke();
 
       // Units
       if (geo) {
